@@ -292,6 +292,8 @@
       <span class="sort-lbl">SORT:</span>
       <span class="pill active" data-s="rank"    onclick="setSort('rank')">DWA Rank</span>
       <span class="pill"        data-s="squeeze" onclick="setSort('squeeze')">Squeeze</span>
+      <span class="pill"        data-s="rsi7"    onclick="setSort('rsi7')">RSI 7</span>
+      <span class="pill"        data-s="rsi20"   onclick="setSort('rsi20')">RSI 20</span>
       <span class="pill"        data-s="rs"      onclick="setSort('rs')">RS%</span>
       <span class="pill"        data-s="ticker"  onclick="setSort('ticker')">Ticker</span>
       <span class="pill"        data-s="pf"      onclick="setSort('pf')">P&F</span>
@@ -309,6 +311,8 @@
           <th onclick="setSort('rs')">RS%<span class="sa">↕</span></th>
           <th>RS Bar</th>
           <th>RRG</th>
+          <th onclick="setSort('rsi7')">RSI 7<span class="sa">↕</span></th>
+          <th onclick="setSort('rsi20')">RSI 20 / MA<span class="sa">↕</span></th>
           <th>Sector</th>
         </tr></thead>
         <tbody id="tableBody"></tbody>
@@ -357,10 +361,17 @@ const SECTORS = {
 function getSector(t){ for(const[s,ts]of Object.entries(SECTORS))if(ts.includes(t))return s; return "Other"; }
 
 // ── STATE ──────────────────────────────────────────
-let allStocks=[], ibdList=[], addedTickers=[];
-let currentUniverse='r1000', sortBy='rank', sortDir=-1;
+let allStocks=[], sectorRS={};
+let sortBy="rank", sortDir=-1;
 let activeRanks=new Set([3,4,5]), activeSq=new Set();
-let sectorRS={};
+let addedTickers=JSON.parse(localStorage.getItem("rsc_watchlist")||"[]");
+let ibdList=JSON.parse(localStorage.getItem("rsc_ibd")||"[]");
+let currentUniverse=localStorage.getItem("rsc_universe")||"r1000";
+function saveState(){
+  localStorage.setItem("rsc_watchlist",JSON.stringify(addedTickers));
+  localStorage.setItem("rsc_ibd",JSON.stringify(ibdList));
+  localStorage.setItem("rsc_universe",currentUniverse);
+}
 
 // ── TTM SQUEEZE ────────────────────────────────────
 function calcTTM(closes, highs, lows) {
@@ -419,6 +430,38 @@ function calcRRG(c){
 function rank(p){return p>=80?5:p>=60?4:p>=40?3:p>=20?2:1;}
 function quad(r,m){return r>=100&&m>=100?'Leading':r>=100?'Weakening':m<100?'Lagging':'Improving';}
 
+// ── RSI ENGINE ─────────────────────────────────────
+function calcRSI(closes,period){
+  if(!closes||closes.length<period+1)return[];
+  const rsi=[];let gains=0,losses=0;
+  for(let i=1;i<=period;i++){const d=closes[i]-closes[i-1];if(d>=0)gains+=d;else losses-=d;}
+  let ag=gains/period,al=losses/period;
+  rsi.push(al===0?100:100-(100/(1+ag/al)));
+  for(let i=period+1;i<closes.length;i++){
+    const d=closes[i]-closes[i-1];
+    ag=(ag*(period-1)+(d>0?d:0))/period;
+    al=(al*(period-1)+(d<0?-d:0))/period;
+    rsi.push(al===0?100:100-(100/(1+ag/al)));
+  }
+  return rsi;
+}
+function calcRSIStats(closes){
+  const r7=calcRSI(closes,7),r20=calcRSI(closes,20);
+  if(!r7.length||!r20.length)return{rsi7:null,rsi20:null,rsi20ma:null,rsi20prev:null};
+  const v7=r7[r7.length-1],v20=r20[r20.length-1];
+  const v20prev=r20.length>1?r20[r20.length-2]:v20;
+  const ma20=r20.length>=20?r20.slice(-20).reduce((a,b)=>a+b,0)/20:null;
+  return{rsi7:v7,rsi20:v20,rsi20ma:ma20,rsi20prev:v20prev};
+}
+function rsi7Color(v){if(v===null)return'var(--muted)';return v>=50?'var(--green)':'var(--red)';}
+function rsi20Color(r20,ma,prev){
+  if(r20===null||ma===null)return'var(--muted)';
+  const nearCross=Math.abs(r20-ma)<3&&r20>47&&r20<53&&r20>prev;
+  if(nearCross)return'var(--accent2)';
+  if(r20>ma&&r20>50)return'var(--green)';
+  return'var(--red)';
+}
+
 // ── FETCH ──────────────────────────────────────────
 async function fetchStock(t){
   try{
@@ -470,11 +513,12 @@ async function loadAll(){
   const stocks=[];
   for(const[ticker,d]of Object.entries(data)){
     const{closes,highs,lows,name,price}=d;
-    const rs=calcRS(closes),pf=calcPF(closes),ttm=calcTTM(closes,highs,lows),rrg=calcRRG(closes);
+    const rs=calcRS(closes),pf=calcPF(closes),ttm=calcTTM(closes,highs,lows),rrg=calcRRG(closes),rsiS=calcRSIStats(closes);
     stocks.push({ticker,name,closes,rs,price,pfTrend:pf.trend,pfSignal:pf.signal,
       sqState:ttm.state,sqMomDir:ttm.momDir,sqHistory:ttm.history,
       rrgRatio:rrg.ratio,rrgMomentum:rrg.momentum,sector:getSector(ticker),
-      isAdded:addedTickers.includes(ticker),isIBD:ibdList.includes(ticker)});
+      isAdded:addedTickers.includes(ticker),isIBD:ibdList.includes(ticker),
+      rsi7:rsiS.rsi7,rsi20:rsiS.rsi20,rsi20ma:rsiS.rsi20ma,rsi20prev:rsiS.rsi20prev});
   }
   const sorted=[...stocks].sort((a,b)=>a.rs-b.rs);
   sorted.forEach((s,i)=>{s.rsPerc=Math.round((i/(sorted.length-1||1))*100);s.dwaRank=rank(s.rsPerc);});
@@ -549,6 +593,8 @@ function applyFilters(){
     if(sortBy==='ticker') return sortDir*a.ticker.localeCompare(b.ticker);
     if(sortBy==='pf')     return sortDir*(a.pfTrend==='up'?-1:1);
     if(sortBy==='squeeze')return sortDir*((sqO[a.sqState]||3)-(sqO[b.sqState]||3));
+    if(sortBy==='rsi7')   return sortDir*((b.rsi7||0)-(a.rsi7||0));
+    if(sortBy==='rsi20')  return sortDir*((b.rsi20||0)-(a.rsi20||0));
     return 0;
   });
   renderTable(data);
@@ -558,7 +604,7 @@ function applyFilters(){
 function renderTable(data){
   const tb=document.getElementById('tableBody');
   if(!data.length){
-    tb.innerHTML=`<tr><td colspan="11"><div class="no-data">NO STOCKS MATCH FILTERS<br><span style="font-size:10px;color:var(--muted)">Adjust rank, P&F, or squeeze filters</span></div></td></tr>`;
+    tb.innerHTML=`<tr><td colspan="13"><div class="no-data">NO STOCKS MATCH FILTERS<br><span style="font-size:10px;color:var(--muted)">Adjust rank, P&F, or squeeze filters</span></div></td></tr>`;
     return;
   }
   const maxRS=Math.max(...data.map(s=>Math.abs(s.rs)));
@@ -588,6 +634,11 @@ function renderTable(data){
         <div class="rs-bar-track"><div class="rs-bar-fill" style="width:${rsW}%;background:${s.rs>=0?'var(--green)':'var(--red)'}"></div></div>
       </td>
       <td><span class="rrg-quad ${QC[q]||''}">${q.substring(0,4)}</span></td>
+      <td><span style="font-family:'Space Mono',monospace;font-size:11px;font-weight:700;color:${rsi7Color(s.rsi7)}">${s.rsi7!==null?s.rsi7.toFixed(1):'—'}</span></td>
+      <td>
+        <span style="font-family:'Space Mono',monospace;font-size:11px;font-weight:700;color:${rsi20Color(s.rsi20,s.rsi20ma,s.rsi20prev)}">${s.rsi20!==null?s.rsi20.toFixed(1):'—'}</span>
+        ${s.rsi20ma!==null?`<span style="font-family:'Space Mono',monospace;font-size:9px;color:var(--muted)"> / ${s.rsi20ma.toFixed(1)}</span>`:''}
+      </td>
       <td><span class="sec-tag">${s.sector}</span></td>
     </tr>`;
   }).join('');
@@ -642,6 +693,8 @@ function showDetail(ticker){
       <div class="det-item"><div class="det-lbl">RS Percentile</div><div class="det-val">${s.rsPerc}p</div></div>
       <div class="det-item"><div class="det-lbl">P&F Signal</div><div class="det-val" style="font-size:11px">${s.pfSignal}</div></div>
       <div class="det-item"><div class="det-lbl">RRG Quad</div><div class="det-val" style="font-size:11px">${q}</div></div>
+      <div class="det-item"><div class="det-lbl">RSI 7</div><div class="det-val" style="color:${rsi7Color(s.rsi7)}">${s.rsi7!==null?s.rsi7.toFixed(1):'—'}</div></div>
+      <div class="det-item"><div class="det-lbl">RSI 20 / 20MA</div><div class="det-val" style="color:${rsi20Color(s.rsi20,s.rsi20ma,s.rsi20prev)};font-size:13px">${s.rsi20!==null?s.rsi20.toFixed(1):'—'} <span style="font-size:10px;color:var(--muted)">/ ${s.rsi20ma!==null?s.rsi20ma.toFixed(1):'—'}</span></div></div>
     </div>
     <div style="margin-top:10px">
       <div style="font-family:'Space Mono',monospace;font-size:9px;color:var(--muted);letter-spacing:.1em;text-transform:uppercase;margin-bottom:4px">TTM Momentum History (20 bars) — faded = squeeze active</div>
@@ -690,7 +743,8 @@ function addTickers(){
   const ts=raw.toUpperCase().split(/[\s,\n;]+/).filter(t=>/^[A-Z]{1,5}(-[A-Z])?$/.test(t));
   if(!ts.length){alert('No valid tickers found.');return;}
   addedTickers=[...new Set([...addedTickers,...ts])];
-  document.getElementById('addedNote').textContent=addedTickers.length+' custom tickers added';
+  saveState();
+  document.getElementById('addedNote').textContent=addedTickers.length+' custom tickers saved';
   document.getElementById('cnt-watch').textContent=addedTickers.length;
   document.getElementById('addBox').value='';
   loadAll();
@@ -699,7 +753,8 @@ function clearAdded(){
   if(!addedTickers.length)return;
   if(!confirm(`Remove all ${addedTickers.length} custom tickers?`))return;
   addedTickers=[];
-  document.getElementById('addedNote').textContent='0 custom tickers added';
+  saveState();
+  document.getElementById('addedNote').textContent='0 custom tickers';
   document.getElementById('cnt-watch').textContent='—';
   if(currentUniverse==='watch')setUniverse('r1000');
   loadAll();
@@ -709,6 +764,7 @@ function parseIBD(){
   const ts=raw.toUpperCase().split(/[\s,\n]+/).filter(t=>/^[A-Z]{1,5}(-[A-Z])?$/.test(t));
   if(!ts.length){alert('No valid tickers found.');return;}
   ibdList=ts;
+  saveState();
   document.getElementById('cnt-ibd').textContent=ts.length;
   setUniverse('ibd');
   loadAll();
@@ -716,6 +772,13 @@ function parseIBD(){
 function setStatus(m){document.getElementById('loadingStatus').textContent=m;}
 function showErr(m){const b=document.getElementById('errorBar');b.textContent='⚠ '+m;b.style.display='block';}
 function tick(){return new Promise(r=>setTimeout(r,0));}
+
+// ── RESTORE PERSISTED UI ──────────────────────────
+(function(){
+  if(addedTickers.length){document.getElementById("addedNote").textContent=addedTickers.length+" custom tickers saved";document.getElementById("cnt-watch").textContent=addedTickers.length;}
+  if(ibdList.length){document.getElementById("cnt-ibd").textContent=ibdList.length;}
+  document.querySelectorAll(".utab").forEach(t=>t.classList.toggle("active",t.dataset.u===currentUniverse));
+})();
 
 loadAll();
 </script>
