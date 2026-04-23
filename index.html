@@ -194,11 +194,12 @@
 <div class="sidebar">
 
   <div>
-    <div class="sb-title">Universe</div>
+    <div class="sb-title">Universe <span style="font-size:9px;color:var(--muted)">(select any combo)</span></div>
     <div class="universe-tabs">
-      <div class="utab active" data-u="r1000" onclick="setUniverse('r1000')">Russell 1000 <span class="cnt" id="cnt-r1000">—</span></div>
-      <div class="utab" data-u="ibd"   onclick="setUniverse('ibd')">IBD Growth 250 <span class="cnt" id="cnt-ibd">—</span></div>
-      <div class="utab" data-u="watch" onclick="setUniverse('watch')">My Watchlist <span class="cnt" id="cnt-watch">—</span></div>
+      <div class="utab active" data-u="r1000" onclick="toggleUniverse('r1000')">Russell 1000 <span class="cnt" id="cnt-r1000">—</span></div>
+      <div class="utab" data-u="ibd"   onclick="toggleUniverse('ibd')">IBD Growth 250 <span class="cnt" id="cnt-ibd">—</span></div>
+      <div class="utab" data-u="watch" onclick="toggleUniverse('watch')">My Watchlist <span class="cnt" id="cnt-watch">—</span></div>
+      <div class="utab" data-u="etf"   onclick="toggleUniverse('etf')">Sector ETFs <span class="cnt" id="cnt-etf">11</span></div>
     </div>
   </div>
 
@@ -383,11 +384,12 @@ let sortBy="rank", sortDir=-1;
 let activeRanks=new Set([3,4,5]), activeSq=new Set();
 let addedTickers=JSON.parse(localStorage.getItem("rsc_watchlist")||"[]");
 let ibdList=JSON.parse(localStorage.getItem("rsc_ibd")||"[]");
-let currentUniverse=localStorage.getItem("rsc_universe")||"r1000";
+const SECTOR_ETFS = ["XLK","XLF","XLV","XLE","XLI","XLY","XLP","XLU","XLRE","XLB","XLC"];
+let activeUniverses = new Set(JSON.parse(localStorage.getItem("rsc_universes")||'["r1000"]'));
 function saveState(){
   localStorage.setItem("rsc_watchlist",JSON.stringify(addedTickers));
   localStorage.setItem("rsc_ibd",JSON.stringify(ibdList));
-  localStorage.setItem("rsc_universe",currentUniverse);
+  localStorage.setItem("rsc_universes",JSON.stringify([...activeUniverses]));
 }
 
 // ── TTM SQUEEZE ────────────────────────────────────
@@ -439,23 +441,52 @@ function calcRS(c){
   const n=c.length;
   return(c[n-1]/c[n-252]-1)*0.4+(c[n-1]/c[n-189]-1)*0.2+(c[n-1]/c[n-126]-1)*0.2+(c[n-1]/c[n-63]-1)*0.2;
 }
-function calcRRG(c){
-  if(!c||c.length<272)return{ratio:100,momentum:100};
-  const rN=calcRS(c),rP=calcRS(c.slice(0,c.length-20));
-  return{ratio:100+rN*100,momentum:100+(rN-rP)*100};
-}
 function rank(p){return p>=80?5:p>=60?4:p>=40?3:p>=20?2:1;}
 function quad(r,m){return r>=100&&m>=100?'Leading':r>=100?'Weakening':m<100?'Lagging':'Improving';}
-// ── RRG HISTORY (weekly snapshots, last 8 weeks) ───
-function calcRRGHistory(closes){
+
+// ── JdK RS-RATIO + RS-MOMENTUM (proper RRG formula) ──────────────
+// Based on Julius de Kemper's published methodology
+// RS-Ratio: smoothed relative performance vs benchmark, centered on 100
+// RS-Momentum: EMA of RS-Ratio change, centered on 100
+function ema(arr, period){
+  const k=2/(period+1); let e=arr[0];
+  return arr.map(v=>(e=v*k+e*(1-k),e));
+}
+function calcJdKRRG(closes, benchCloses){
+  if(!closes||!benchCloses||closes.length<52||benchCloses.length<52)
+    return{ratio:100,momentum:100};
+  // Align lengths
+  const len=Math.min(closes.length,benchCloses.length);
+  const s=closes.slice(closes.length-len);
+  const b=benchCloses.slice(benchCloses.length-len);
+  // Raw relative strength: stock/benchmark ratio normalized to 100
+  const rawRS=s.map((v,i)=>b[i]?(v/b[i])*100:100);
+  // Smooth with 10-period EMA (JdK standard)
+  const smoothRS=ema(rawRS,10);
+  // Normalize to 100 centerline using 52-week mean
+  const mean52=smoothRS.slice(-52).reduce((a,c)=>a+c,0)/52;
+  const std52=Math.sqrt(smoothRS.slice(-52).reduce((a,c)=>a+(c-mean52)**2,0)/52)||1;
+  const rsRatio=((smoothRS[smoothRS.length-1]-mean52)/std52)*10+100;
+  // RS-Momentum: 1-period ROC of RS-Ratio series, smoothed, normalized
+  const ratioSeries=smoothRS.map(v=>((v-mean52)/std52)*10+100);
+  const roc=ratioSeries.slice(1).map((v,i)=>v-ratioSeries[i]);
+  const smoothRoc=ema(roc,10);
+  const rocMean=smoothRoc.slice(-52).reduce((a,c)=>a+c,0)/52;
+  const rocStd=Math.sqrt(smoothRoc.slice(-52).reduce((a,c)=>a+(c-rocMean)**2,0)/52)||1;
+  const rsMomentum=((smoothRoc[smoothRoc.length-1]-rocMean)/rocStd)*10+100;
+  return{ratio:rsRatio,momentum:rsMomentum};
+}
+
+// ── RRG HISTORY (weekly snapshots, last 8 weeks) ───────────────────
+function calcRRGHistory(closes, benchCloses){
   const WEEK=5;
-  if(!closes||closes.length<272+WEEK*8)return{weeksInQuad:null,arrow:'',history:[]};
+  if(!closes||closes.length<52+WEEK*8)return{weeksInQuad:null,arrow:'',history:[]};
   const snapshots=[];
   for(let w=8;w>=0;w--){
-    const slice=closes.slice(0,closes.length-w*WEEK);
-    if(slice.length<272){snapshots.push(null);continue;}
-    const rN=calcRS(slice),rP=calcRS(slice.slice(0,slice.length-20));
-    snapshots.push({ratio:100+rN*100,momentum:100+(rN-rP)*100});
+    const sc=closes.slice(0,closes.length-w*WEEK);
+    const sb=benchCloses?benchCloses.slice(0,benchCloses.length-w*WEEK):null;
+    if(sc.length<52){snapshots.push(null);continue;}
+    snapshots.push(calcJdKRRG(sc,sb||sc));
   }
   const history=snapshots.map(s=>s?quad(s.ratio,s.momentum):null);
   const currentQ=history[8];
@@ -548,16 +579,26 @@ async function loadAll(){
   document.getElementById('loadingOverlay').classList.remove('hidden');
   document.getElementById('errorBar').style.display='none';
 
-  const base=currentUniverse==='ibd'&&ibdList.length?ibdList
-            :currentUniverse==='watch'&&addedTickers.length?addedTickers
-            :R1000;
-  const tickers=[...new Set([...base,...addedTickers])];
-  // Fetch external benchmark if needed
-  if(benchmarkMode === 'spy' || benchmarkMode === 'qqq'){
-    const bmTicker = benchmarkMode === 'spy' ? 'SPY' : 'QQQ';
-    setStatus(`Fetching ${bmTicker} benchmark...`);
-    const bmData = await fetchStock(bmTicker);
-    benchmarkCloses = bmData ? bmData.closes : null;
+  // Merge all active universes
+  let tickers=[];
+  if(activeUniverses.has('r1000')) tickers.push(...R1000);
+  if(activeUniverses.has('ibd') && ibdList.length) tickers.push(...ibdList);
+  if(activeUniverses.has('watch') && addedTickers.length) tickers.push(...addedTickers);
+  if(activeUniverses.has('etf')) tickers.push(...SECTOR_ETFS);
+  tickers=[...new Set(tickers)];
+  if(!tickers.length) tickers=[...R1000]; // fallback
+  // Always fetch SPY for sector RRG (matches StockCharts benchmark)
+  setStatus('Fetching SPY for RRG...');
+  const spyFetch = await fetchStock('SPY');
+  spyCloses = spyFetch ? spyFetch.closes : null;
+
+  // Fetch external benchmark for Relative P&F if needed
+  if(benchmarkMode === 'spy'){
+    benchmarkCloses = spyCloses;
+  } else if(benchmarkMode === 'qqq'){
+    setStatus('Fetching QQQ benchmark...');
+    const qqqData = await fetchStock('QQQ');
+    benchmarkCloses = qqqData ? qqqData.closes : null;
   } else {
     benchmarkCloses = null; // universe mode — built after fetch
   }
@@ -598,7 +639,8 @@ async function loadAll(){
         return bVal ? (c/sBase) / (bVal/bBase) : 1;
       });
     }
-    const rs=calcRS(closes),pf=calcPF(ratioSeries),ttm=calcTTM(closes,highs,lows),rrg=calcRRG(closes),rsiS=calcRSIStats(closes),rrgH=calcRRGHistory(closes);
+    const rs=calcRS(closes),pf=calcPF(ratioSeries),ttm=calcTTM(closes,highs,lows);
+    const rrg=calcJdKRRG(closes,spyCloses),rsiS=calcRSIStats(closes),rrgH=calcRRGHistory(closes,spyCloses);
     stocks.push({ticker,name,closes,rs,price,pfTrend:pf.trend,pfSignal:pf.signal,
       sqState:ttm.state,sqMomDir:ttm.momDir,sqHistory:ttm.history,
       rrgRatio:rrg.ratio,rrgMomentum:rrg.momentum,sector:getSector(ticker),
@@ -611,13 +653,29 @@ async function loadAll(){
   allStocks=stocks;
 
   setStatus("Sector RS..."); await tick();
+
+  // Build universe equal-weight index for sector RRG benchmark
+  // This forces true relative distribution — sectors measured vs each other, not vs SPY
+  const uniAllC = stocks.map(s=>s.closes).filter(c=>c.length>0);
+  const uniMinLen = Math.min(...uniAllC.map(c=>c.length));
+  const uniIdx = [];
+  for(let i=0;i<uniMinLen;i++){
+    uniIdx.push(uniAllC.reduce((s,c)=>s+(c[c.length-uniMinLen+i]/c[c.length-uniMinLen]),0)/uniAllC.length);
+  }
+
   sectorRS={};
   for(const[sec,ts]of Object.entries(SECTORS)){
     const m=stocks.filter(s=>ts.includes(s.ticker));if(!m.length)continue;
     const ar=m.reduce((a,b)=>a+b.rs,0)/m.length;
-    const aR=m.reduce((a,b)=>a+b.rrgRatio,0)/m.length;
-    const aM=m.reduce((a,b)=>a+b.rrgMomentum,0)/m.length;
-    sectorRS[sec]={rs:ar,ratio:aR,momentum:aM,quad:quad(aR,aM)};
+    // Build equal-weight sector price series, benchmark vs universe index
+    const minLen=Math.min(...m.map(s=>s.closes.length));
+    const secIdx=[];
+    for(let i=0;i<minLen;i++){
+      secIdx.push(m.reduce((s,stk)=>s+(stk.closes[stk.closes.length-minLen+i]/stk.closes[stk.closes.length-minLen]),0)/m.length);
+    }
+    // Use universe index as benchmark — forces sectors to distribute across all quadrants
+    const srrg=calcJdKRRG(secIdx,uniIdx);
+    sectorRS[sec]={rs:ar,ratio:srrg.ratio,momentum:srrg.momentum,quad:quad(srrg.ratio,srrg.momentum)};
   }
 
   setStatus("Rendering..."); await tick();
@@ -665,8 +723,14 @@ function applyFilters(){
   const pfF=document.getElementById('pfFilter').value;
   const q=document.getElementById('searchBox').value.toLowerCase();
   let data=[...allStocks];
-  if(currentUniverse==='ibd'&&ibdList.length)data=data.filter(s=>ibdList.includes(s.ticker));
-  else if(currentUniverse==='watch'&&addedTickers.length)data=data.filter(s=>addedTickers.includes(s.ticker));
+  // Filter to only show stocks from active universes
+  data=data.filter(s=>{
+    if(activeUniverses.has('r1000')&&R1000.includes(s.ticker))return true;
+    if(activeUniverses.has('ibd')&&ibdList.includes(s.ticker))return true;
+    if(activeUniverses.has('watch')&&addedTickers.includes(s.ticker))return true;
+    if(activeUniverses.has('etf')&&SECTOR_ETFS.includes(s.ticker))return true;
+    return false;
+  });
   if(q)data=data.filter(s=>s.ticker.toLowerCase().includes(q)||s.name.toLowerCase().includes(q));
   if(pfF==='up')data=data.filter(s=>s.pfTrend==='up');
   if(pfF==='down')data=data.filter(s=>s.pfTrend==='down');
@@ -818,10 +882,15 @@ function setBenchmark(bm){
   document.querySelectorAll('[data-bm]').forEach(t=>t.classList.toggle('active',t.dataset.bm===bm));
   loadAll();
 }
-function setUniverse(u){
-  currentUniverse=u;
-  document.querySelectorAll('.utab').forEach(t=>t.classList.toggle('active',t.dataset.u===u));
-  if(allStocks.length)applyFilters();
+function toggleUniverse(u){
+  if(activeUniverses.has(u)) {
+    if(activeUniverses.size>1) activeUniverses.delete(u); // keep at least one active
+  } else {
+    activeUniverses.add(u);
+  }
+  saveState();
+  document.querySelectorAll('.utab').forEach(t=>t.classList.toggle('active',activeUniverses.has(t.dataset.u)));
+  if(allStocks.length){ loadAll(); } // reload to fetch any new tickers
 }
 function setSort(s){
   if(sortBy===s)sortDir*=-1;else{sortBy=s;sortDir=-1;}
@@ -858,7 +927,7 @@ function clearAdded(){
   saveState();
   document.getElementById('addedNote').textContent='0 custom tickers';
   document.getElementById('cnt-watch').textContent='—';
-  if(currentUniverse==='watch')setUniverse('r1000');
+  activeUniverses.delete('watch');saveState();
   loadAll();
 }
 function parseIBD(){
@@ -868,7 +937,7 @@ function parseIBD(){
   ibdList=ts;
   saveState();
   document.getElementById('cnt-ibd').textContent=ts.length;
-  setUniverse('ibd');
+  activeUniverses.add('ibd');saveState();
   loadAll();
 }
 function setStatus(m){document.getElementById('loadingStatus').textContent=m;}
@@ -879,7 +948,7 @@ function tick(){return new Promise(r=>setTimeout(r,0));}
 (function(){
   if(addedTickers.length){document.getElementById("addedNote").textContent=addedTickers.length+" custom tickers saved";document.getElementById("cnt-watch").textContent=addedTickers.length;}
   if(ibdList.length){document.getElementById("cnt-ibd").textContent=ibdList.length;}
-  document.querySelectorAll(".utab").forEach(t=>t.classList.toggle("active",t.dataset.u===currentUniverse));
+  document.querySelectorAll(".utab").forEach(t=>t.classList.toggle("active",activeUniverses.has(t.dataset.u)));
 })();
 
 loadAll();
