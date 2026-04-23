@@ -320,6 +320,7 @@
       <table>
         <thead><tr>
           <th onclick="setSort('ticker')">Ticker<span class="sa">↕</span></th>
+          <th onclick="setSort('price')">Price<span class="sa">↕</span></th>
           <th>Name</th>
           <th onclick="setSort('rank')" class="sorted">Rank<span class="sa">↕</span></th>
           <th onclick="setSort('pf')">Rel P&F<span class="sa">↕</span></th>
@@ -418,21 +419,24 @@ function calcTTM(closes, highs, lows) {
 
 // ── P&F ────────────────────────────────────────────
 function calcPF(closes){
-  if(!closes||closes.length<10) return {trend:'unknown',signal:'—'};
+  if(!closes||closes.length<10) return {trend:'unknown',signal:'—',signalBarsAgo:null};
   const LS=0.01,REV=3;
   const box=p=>Math.round(Math.log(p)/LS)*LS;
   let cols=[],dir='X',cs=box(closes[0]),ce=box(closes[0]);
+  const colStart=[0]; // track bar index when each column started
   for(let i=1;i<closes.length;i++){
     const c=box(closes[i]);
-    if(dir==='X'){if(c>=ce+LS)ce=c;else if(c<=ce-REV*LS){cols.push({dir:'X',top:ce,bot:cs});dir='O';cs=ce-LS;ce=c;}}
-    else{if(c<=ce-LS)ce=c;else if(c>=ce+REV*LS){cols.push({dir:'O',top:cs,bot:ce});dir='X';cs=ce+LS;ce=c;}}
+    if(dir==='X'){if(c>=ce+LS)ce=c;else if(c<=ce-REV*LS){cols.push({dir:'X',top:ce,bot:cs,startBar:colStart[colStart.length-1]});dir='O';cs=ce-LS;ce=c;colStart.push(i);}}
+    else{if(c<=ce-LS)ce=c;else if(c>=ce+REV*LS){cols.push({dir:'O',top:cs,bot:ce,startBar:colStart[colStart.length-1]});dir='X';cs=ce+LS;ce=c;colStart.push(i);}}
   }
-  cols.push({dir,top:dir==='X'?ce:cs,bot:dir==='X'?cs:ce});
-  if(cols.length<2) return {trend:'up',signal:'BUY'};
+  const lastStartBar=colStart[colStart.length-1];
+  const signalBarsAgo=closes.length-1-lastStartBar;
+  cols.push({dir,top:dir==='X'?ce:cs,bot:dir==='X'?cs:ce,startBar:lastStartBar});
+  if(cols.length<2) return {trend:'up',signal:'BUY',signalBarsAgo};
   const last=cols[cols.length-1],p3=cols.length>=3?cols[cols.length-3]:null;
-  if(last.dir==='X'&&p3&&last.top>p3.top) return {trend:'up',signal:'DBL TOP BUY'};
-  if(last.dir==='O'&&p3&&last.bot<p3.bot)  return {trend:'down',signal:'DBL BOT SELL'};
-  return {trend:last.dir==='X'?'up':'down',signal:last.dir==='X'?'X COL':'O COL'};
+  if(last.dir==='X'&&p3&&last.top>p3.top) return {trend:'up',signal:'DBL TOP BUY',signalBarsAgo};
+  if(last.dir==='O'&&p3&&last.bot<p3.bot)  return {trend:'down',signal:'DBL BOT SELL',signalBarsAgo};
+  return {trend:last.dir==='X'?'up':'down',signal:last.dir==='X'?'X COL':'O COL',signalBarsAgo};
 }
 
 // ── RS / RRG ───────────────────────────────────────
@@ -521,11 +525,18 @@ function calcRSI(closes,period){
 }
 function calcRSIStats(closes){
   const r7=calcRSI(closes,7),r20=calcRSI(closes,20);
-  if(!r7.length||!r20.length)return{rsi7:null,rsi20:null,rsi20ma:null,rsi20prev:null};
+  if(!r7.length||!r20.length)return{rsi7:null,rsi20:null,rsi20ma:null,rsi20prev:null,momDuration:null,momDir:'flat'};
   const v7=r7[r7.length-1],v20=r20[r20.length-1];
   const v20prev=r20.length>1?r20[r20.length-2]:v20;
   const ma20=r20.length>=20?r20.slice(-20).reduce((a,b)=>a+b,0)/20:null;
-  return{rsi7:v7,rsi20:v20,rsi20ma:ma20,rsi20prev:v20prev};
+  // Count consecutive bars momentum has been rising or falling
+  const momDir=v20>v20prev?'up':v20<v20prev?'down':'flat';
+  let momDuration=1;
+  for(let i=r20.length-2;i>0;i--){
+    const d=r20[i]>r20[i-1]?'up':r20[i]<r20[i-1]?'down':'flat';
+    if(d===momDir)momDuration++;else break;
+  }
+  return{rsi7:v7,rsi20:v20,rsi20ma:ma20,rsi20prev:v20prev,momDuration,momDir};
 }
 function rsi7Color(v){if(v===null)return'var(--muted)';return v>=50?'var(--green)':'var(--red)';}
 function rsi20Color(r20,ma,prev){
@@ -642,10 +653,12 @@ async function loadAll(){
     const rs=calcRS(closes),pf=calcPF(ratioSeries),ttm=calcTTM(closes,highs,lows);
     const rrg=calcJdKRRG(closes,spyCloses),rsiS=calcRSIStats(closes),rrgH=calcRRGHistory(closes,spyCloses);
     stocks.push({ticker,name,closes,rs,price,pfTrend:pf.trend,pfSignal:pf.signal,
+      pfSignalBarsAgo:pf.signalBarsAgo,
       sqState:ttm.state,sqMomDir:ttm.momDir,sqHistory:ttm.history,
       rrgRatio:rrg.ratio,rrgMomentum:rrg.momentum,sector:getSector(ticker),
       isAdded:addedTickers.includes(ticker),isIBD:ibdList.includes(ticker),
       rsi7:rsiS.rsi7,rsi20:rsiS.rsi20,rsi20ma:rsiS.rsi20ma,rsi20prev:rsiS.rsi20prev,
+      momDuration:rsiS.momDuration,momDir:rsiS.momDir,
       rrgArrow:rrgH.arrow,rrgWeeks:rrgH.weeksInQuad,rrgHistory:rrgH.history});
   }
   const sorted=[...stocks].sort((a,b)=>a.rs-b.rs);
@@ -684,6 +697,25 @@ async function loadAll(){
       tail.push(calcJdKRRG(sc,ub));
     }
     sectorRS[sec]={rs:ar,ratio:srrg.ratio,momentum:srrg.momentum,quad:quad(srrg.ratio,srrg.momentum),tail};
+  }
+
+  // Cross-sector normalization — recenters ratio/momentum so sectors spread around 100
+  const secVals = Object.values(sectorRS);
+  if(secVals.length > 1){
+    const rMean = secVals.reduce((a,b)=>a+b.ratio,0)/secVals.length;
+    const mMean = secVals.reduce((a,b)=>a+b.momentum,0)/secVals.length;
+    const rStd  = Math.sqrt(secVals.reduce((a,b)=>a+(b.ratio-rMean)**2,0)/secVals.length)||1;
+    const mStd  = Math.sqrt(secVals.reduce((a,b)=>a+(b.momentum-mMean)**2,0)/secVals.length)||1;
+    for(const d of secVals){
+      d.ratio    = ((d.ratio-rMean)/rStd)*10+100;
+      d.momentum = ((d.momentum-mMean)/mStd)*10+100;
+      d.quad     = quad(d.ratio,d.momentum);
+      // renormalize tail points too
+      if(d.tail) d.tail=d.tail.map(t=>t?{
+        ratio:    ((t.ratio-rMean)/rStd)*10+100,
+        momentum: ((t.momentum-mMean)/mStd)*10+100
+      }:null);
+    }
   }
 
   setStatus("Rendering..."); await tick();
@@ -766,6 +798,7 @@ function applyFilters(){
     if(sortBy==='rank')   return sortDir*(b.dwaRank-a.dwaRank||b.rsPerc-a.rsPerc);
     if(sortBy==='rs')     return sortDir*(b.rs-a.rs);
     if(sortBy==='ticker') return sortDir*a.ticker.localeCompare(b.ticker);
+    if(sortBy==='price')  return sortDir*(b.price-a.price);
     if(sortBy==='pf')     return sortDir*(a.pfTrend==='up'?-1:1);
     if(sortBy==='squeeze')return sortDir*((sqO[a.sqState]||3)-(sqO[b.sqState]||3));
     if(sortBy==='rsi7')   return sortDir*((b.rsi7||0)-(a.rsi7||0));
@@ -797,6 +830,7 @@ function renderTable(data){
     const tags=(s.isIBD?'<span class="tag-ibd">IBD</span>':'')+(s.isAdded&&!s.isIBD?'<span class="tag-add">+</span>':'');
     return `<tr onclick="showDetail('${s.ticker}')">
       <td class="td-ticker">${s.ticker}${tags}</td>
+      <td style="font-family:'Space Mono',monospace;font-size:11px">$${s.price.toFixed(2)}</td>
       <td class="td-name">${s.name}</td>
       <td><div class="rbadge" style="color:${rc};border:1.5px solid ${rc}">${s.dwaRank}</div></td>
       <td>${s.pfTrend==='up'?'<span class="tup">▲ UP</span>':s.pfTrend==='down'?'<span class="tdn">▼ DN</span>':'<span style="color:var(--muted)">—</span>'}</td>
@@ -849,7 +883,7 @@ function renderSectorBars(){
     return `<div class="sbar-row">
       <div class="sbar-name" title="${sec}">${sec}</div>
       <div class="sbar-track"><div class="sbar-fill" style="width:${w}%;background:${col}"></div></div>
-      <div class="sbar-quad" style="color:${col}">${d.quad[0]}</div>
+      <div class="sbar-quad" style="color:${col};width:20px;font-size:9px">${{Leading:"LD",Weakening:"WK",Lagging:"LG",Improving:"IM"}[d.quad]||"?"}</div>
     </div>`;
   }).join('');
 }
@@ -872,13 +906,14 @@ function showDetail(ticker){
     <div class="det-name">${s.name}</div>
     <div class="det-grid">
       <div class="det-item"><div class="det-lbl">DWA Rank</div><div class="det-val" style="color:${rc}">${s.dwaRank}/5</div></div>
-      <div class="det-item"><div class="det-lbl">Relative P&F</div><div class="det-val" style="color:${s.pfTrend==='up'?'var(--green)':'var(--red)'}">${s.pfTrend==='up'?'▲ UP':'▼ DOWN'}</div></div>
-      <div class="det-item"><div class="det-lbl">TTM Squeeze</div><div class="det-val" style="color:${sqCol};font-size:12px">${sqLbl}</div></div>
-      <div class="det-item"><div class="det-lbl">Momentum</div><div class="det-val" style="color:${s.sqMomDir==='up'?'var(--green)':'var(--red)'};font-size:12px">${s.sqMomDir==='up'?'▲ Rising':s.sqMomDir==='down'?'▼ Falling':'Flat'}</div></div>
+      <div class="det-item"><div class="det-lbl">Rel P&F Trend (vs bmk)</div><div class="det-val" style="color:${s.pfTrend==='up'?'var(--green)':'var(--red)'}">${s.pfTrend==='up'?'▲ UP':'▼ DOWN'}</div></div>
+      <div class="det-item"><div class="det-lbl">TTM Squeeze (vol)</div><div class="det-val" style="color:${sqCol};font-size:12px">${sqLbl}</div></div>
+      <div class="det-item"><div class="det-lbl">TTM Mom (vol)</div><div class="det-val" style="color:${s.sqMomDir==='up'?'var(--green)':'var(--red)'};font-size:12px">${s.sqMomDir==='up'?'▲ Rising':s.sqMomDir==='down'?'▼ Falling':'Flat'}</div></div>
       <div class="det-item"><div class="det-lbl">RS Score</div><div class="det-val" style="color:${s.rs>=0?'var(--green)':'var(--red)'}">${(s.rs*100).toFixed(1)}%</div></div>
       <div class="det-item"><div class="det-lbl">RS Percentile</div><div class="det-val">${s.rsPerc}p</div></div>
-      <div class="det-item"><div class="det-lbl">Rel P&F Signal</div><div class="det-val" style="font-size:11px">${s.pfSignal}</div></div>
-      <div class="det-item"><div class="det-lbl">RRG Quad</div><div class="det-val" style="font-size:11px">${q} ${s.rrgArrow||''} ${s.rrgWeeks?`<span style="font-size:10px;color:var(--muted)">${s.rrgWeeks}w</span>`:''}</div></div>
+      <div class="det-item"><div class="det-lbl">Rel P&F Signal (vs bmk)</div><div class="det-val" style="font-size:11px">${s.pfSignal}<br><span style="font-size:9px;color:var(--muted)">${s.pfSignalBarsAgo!==null?s.pfSignalBarsAgo+' bars ago (~'+Math.round(s.pfSignalBarsAgo/5)+'w)':''}</span></div></div>
+      <div class="det-item"><div class="det-lbl">RSI 20 Mom (abs)</div><div class="det-val" style="color:${s.momDir==='up'?'var(--green)':s.momDir==='down'?'var(--red)':'var(--muted)'};font-size:12px">${s.momDir==='up'?'▲':s.momDir==='down'?'▼':'—'} ${s.momDuration||''} bars</div></div>
+      <div class="det-item"><div class="det-lbl">RRG Rotation (rel)</div><div class="det-val" style="font-size:11px">${q} ${s.rrgArrow||''} ${s.rrgWeeks?`<span style="font-size:10px;color:var(--muted)">${s.rrgWeeks}w</span>`:''}</div></div>
       <div class="det-item"><div class="det-lbl">RSI 7</div><div class="det-val" style="color:${rsi7Color(s.rsi7)}">${s.rsi7!==null?s.rsi7.toFixed(1):'—'}</div></div>
       <div class="det-item"><div class="det-lbl">RSI 20 / 20MA</div><div class="det-val" style="color:${rsi20Color(s.rsi20,s.rsi20ma,s.rsi20prev)};font-size:13px">${s.rsi20!==null?s.rsi20.toFixed(1):'—'} <span style="font-size:10px;color:var(--muted)">/ ${s.rsi20ma!==null?s.rsi20ma.toFixed(1):'—'}</span></div></div>
     </div>
