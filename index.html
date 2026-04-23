@@ -138,6 +138,12 @@
   .rs-bar-track { height: 3px; background: var(--surface2); margin-top: 3px; min-width: 60px; }
   .rs-bar-fill { height: 100%; }
   .rrg-quad { font-size: 10px; font-family: 'Space Mono', monospace; padding: 2px 5px; border: 1px solid; }
+  .rrg-cell { display:flex; flex-direction:column; gap:3px; }
+  .rrg-top { display:flex; align-items:center; gap:4px; }
+  .rrg-arrow { font-size:13px; }
+  .rrg-weeks { font-family:'Space Mono',monospace; font-size:9px; color:var(--muted); }
+  .rrg-spark { display:flex; gap:2px; align-items:center; }
+  .spark-dot { width:7px; height:7px; border-radius:50%; flex-shrink:0; }
   .rq-L { border-color: var(--green); color: var(--green); }
   .rq-W { border-color: var(--accent2); color: var(--accent2); }
   .rq-La { border-color: var(--red); color: var(--red); }
@@ -228,7 +234,7 @@
   </div>
 
   <div>
-    <div class="sb-title">P&F Trend</div>
+    <div class="sb-title">Relative P&F</div>
     <div class="filter-row">
       <label style="color:var(--label)">Show</label>
       <select id="pfFilter" onchange="applyFilters()">
@@ -236,6 +242,18 @@
         <option value="up">Uptrend only</option>
         <option value="down">Downtrend only</option>
       </select>
+    </div>
+  </div>
+
+  <div>
+    <div class="sb-title">P&F Benchmark</div>
+    <div style="display:flex;flex-direction:column;gap:4px">
+      <div class="utab active" data-bm="universe" onclick="setBenchmark('universe')">Universe Avg <span class="cnt" id="bm-universe">●</span></div>
+      <div class="utab" data-bm="spy" onclick="setBenchmark('spy')">SPY (S&P 500) <span class="cnt" id="bm-spy"></span></div>
+      <div class="utab" data-bm="qqq" onclick="setBenchmark('qqq')">QQQ (Nasdaq) <span class="cnt" id="bm-qqq"></span></div>
+    </div>
+    <div style="font-size:10px;color:var(--muted);margin-top:6px;line-height:1.6">
+      Rel P&F signal = stock outperforming selected benchmark on P&F basis
     </div>
   </div>
 
@@ -264,7 +282,7 @@
 
   <div class="summary-bar">
     <div class="scard"><div class="scard-label">In Universe</div><div class="scard-value" id="st-total">—</div><div class="scard-sub">stocks loaded</div></div>
-    <div class="scard"><div class="scard-label">P&F Uptrend</div><div class="scard-value" style="color:var(--green)" id="st-up">—</div><div class="scard-sub">bullish P&F</div></div>
+    <div class="scard"><div class="scard-label">Rel P&F ↑</div><div class="scard-value" style="color:var(--green)" id="st-up">—</div><div class="scard-sub">bullish P&F</div></div>
     <div class="scard"><div class="scard-label">Rank ≥ 3</div><div class="scard-value" style="color:var(--accent2)" id="st-r3">—</div><div class="scard-sub">DWA buy zone</div></div>
     <div class="scard"><div class="scard-label">↑ + Rank≥3</div><div class="scard-value" style="color:var(--accent)" id="st-both">—</div><div class="scard-sub">both criteria</div></div>
     <div class="scard"><div class="scard-label">Sq. Firing</div><div class="scard-value" style="color:var(--sq-fire)" id="st-fire">—</div><div class="scard-sub">TTM breakout</div></div>
@@ -294,7 +312,6 @@
       <span class="pill"        data-s="squeeze" onclick="setSort('squeeze')">Squeeze</span>
       <span class="pill"        data-s="rsi7"    onclick="setSort('rsi7')">RSI 7</span>
       <span class="pill"        data-s="rsi20"   onclick="setSort('rsi20')">RSI 20</span>
-      <span class="pill"        data-s="rs"      onclick="setSort('rs')">RS%</span>
       <span class="pill"        data-s="ticker"  onclick="setSort('ticker')">Ticker</span>
       <span class="pill"        data-s="pf"      onclick="setSort('pf')">P&F</span>
     </div>
@@ -304,11 +321,10 @@
           <th onclick="setSort('ticker')">Ticker<span class="sa">↕</span></th>
           <th>Name</th>
           <th onclick="setSort('rank')" class="sorted">Rank<span class="sa">↕</span></th>
-          <th onclick="setSort('pf')">P&F<span class="sa">↕</span></th>
+          <th onclick="setSort('pf')">Rel P&F<span class="sa">↕</span></th>
           <th>Signal</th>
           <th onclick="setSort('squeeze')">TTM Squeeze<span class="sa">↕</span></th>
           <th>Mom</th>
-          <th onclick="setSort('rs')">RS%<span class="sa">↕</span></th>
           <th>RS Bar</th>
           <th>RRG</th>
           <th onclick="setSort('rsi7')">RSI 7<span class="sa">↕</span></th>
@@ -361,7 +377,8 @@ const SECTORS = {
 function getSector(t){ for(const[s,ts]of Object.entries(SECTORS))if(ts.includes(t))return s; return "Other"; }
 
 // ── STATE ──────────────────────────────────────────
-let allStocks=[], sectorRS={};
+let allStocks=[], sectorRS={}, spyCloses=null, benchmarkCloses=null;
+let benchmarkMode='universe'; // 'universe' | 'spy' | 'qqq'
 let sortBy="rank", sortDir=-1;
 let activeRanks=new Set([3,4,5]), activeSq=new Set();
 let addedTickers=JSON.parse(localStorage.getItem("rsc_watchlist")||"[]");
@@ -429,6 +446,32 @@ function calcRRG(c){
 }
 function rank(p){return p>=80?5:p>=60?4:p>=40?3:p>=20?2:1;}
 function quad(r,m){return r>=100&&m>=100?'Leading':r>=100?'Weakening':m<100?'Lagging':'Improving';}
+// ── RRG HISTORY (weekly snapshots, last 8 weeks) ───
+function calcRRGHistory(closes){
+  const WEEK=5;
+  if(!closes||closes.length<272+WEEK*8)return{weeksInQuad:null,arrow:'',history:[]};
+  const snapshots=[];
+  for(let w=8;w>=0;w--){
+    const slice=closes.slice(0,closes.length-w*WEEK);
+    if(slice.length<272){snapshots.push(null);continue;}
+    const rN=calcRS(slice),rP=calcRS(slice.slice(0,slice.length-20));
+    snapshots.push({ratio:100+rN*100,momentum:100+(rN-rP)*100});
+  }
+  const history=snapshots.map(s=>s?quad(s.ratio,s.momentum):null);
+  const currentQ=history[8];
+  let weeksInQuad=0;
+  for(let i=8;i>=0;i--){if(history[i]===currentQ)weeksInQuad++;else break;}
+  const now=snapshots[8],prev2=snapshots[6];
+  let arrow='';
+  if(now&&prev2){
+    const dR=now.ratio-prev2.ratio,dM=now.momentum-prev2.momentum;
+    if(dR>0&&dM>0)arrow='↗';else if(dR>0&&dM<0)arrow='↘';
+    else if(dR<0&&dM>0)arrow='↖';else if(dR<0&&dM<0)arrow='↙';
+    else if(dR>0)arrow='→';else if(dR<0)arrow='←';
+    else if(dM>0)arrow='↑';else arrow='↓';
+  }
+  return{weeksInQuad,arrow,history:history.slice(1)};
+}
 
 // ── RSI ENGINE ─────────────────────────────────────
 function calcRSI(closes,period){
@@ -463,14 +506,21 @@ function rsi20Color(r20,ma,prev){
 }
 
 // ── FETCH ──────────────────────────────────────────
+// Fetch with timeout to prevent hanging
+function fetchWithTimeout(url, ms=8000){
+  return Promise.race([
+    fetch(url),
+    new Promise((_,reject)=>setTimeout(()=>reject(new Error('timeout')),ms))
+  ]);
+}
 async function fetchStock(t){
   try{
     const base=`https://query1.finance.yahoo.com/v8/finance/chart/${t}?interval=1d&range=2y`;
     const proxy=`https://corsproxy.io/?url=${encodeURIComponent(base)}`;
-    let r=await fetch(proxy);
-    // fallback to direct if proxy fails
-    if(!r.ok) r=await fetch(base);
-    if(!r.ok)return null;
+    let r;
+    try{ r=await fetchWithTimeout(proxy,6000); }
+    catch(e){ r=await fetchWithTimeout(base,6000); }
+    if(!r||!r.ok)return null;
     const d=await r.json();
     const res=d?.chart?.result?.[0]; if(!res)return null;
     const q=res.indicators?.quote?.[0];
@@ -481,12 +531,12 @@ async function fetchStock(t){
   }catch{return null;}
 }
 async function fetchBatch(tickers,onProg){
-  const out={};const C=8;
+  const out={};const C=10; // slightly larger chunks now that we have timeouts
   for(let i=0;i<tickers.length;i+=C){
     const chunk=tickers.slice(i,i+C);
     await Promise.all(chunk.map(async t=>{const d=await fetchStock(t);if(d)out[t]=d;}));
     onProg(Math.min(i+C,tickers.length),tickers.length);
-    await new Promise(r=>setTimeout(r,120));
+    await new Promise(r=>setTimeout(r,80));
   }
   return out;
 }
@@ -502,23 +552,59 @@ async function loadAll(){
             :currentUniverse==='watch'&&addedTickers.length?addedTickers
             :R1000;
   const tickers=[...new Set([...base,...addedTickers])];
-  setStatus(`Fetching ${tickers.length} stocks...`);
+  // Fetch external benchmark if needed
+  if(benchmarkMode === 'spy' || benchmarkMode === 'qqq'){
+    const bmTicker = benchmarkMode === 'spy' ? 'SPY' : 'QQQ';
+    setStatus(`Fetching ${bmTicker} benchmark...`);
+    const bmData = await fetchStock(bmTicker);
+    benchmarkCloses = bmData ? bmData.closes : null;
+  } else {
+    benchmarkCloses = null; // universe mode — built after fetch
+  }
 
+  setStatus(`Fetching ${tickers.length} stocks...`);
   let data;
   try{ data=await fetchBatch(tickers,(d,t)=>setStatus(`Fetching... ${d}/${t}`)); }
   catch(e){ showErr("Fetch failed. Check connection."); done(btn); return; }
 
   setStatus("Computing P&F, TTM, RS..."); await tick();
 
+  // Build universe equal-weight benchmark if in universe mode
+  if(benchmarkMode === 'universe'){
+    const allC = Object.values(data).map(d=>d.closes).filter(c=>c.length>0);
+    const minLen = Math.min(...allC.map(c=>c.length));
+    // equal-weight index: average price at each bar (normalized to start at 1)
+    const idx = [];
+    for(let i=0;i<minLen;i++){
+      const avg = allC.reduce((s,c)=>s+(c[c.length-minLen+i]/c[c.length-minLen]),0)/allC.length;
+      idx.push(avg);
+    }
+    benchmarkCloses = idx;
+  }
+
   const stocks=[];
   for(const[ticker,d]of Object.entries(data)){
     const{closes,highs,lows,name,price}=d;
-    const rs=calcRS(closes),pf=calcPF(closes),ttm=calcTTM(closes,highs,lows),rrg=calcRRG(closes),rsiS=calcRSIStats(closes);
+    // Build ratio series for Relative P&F (stock / benchmark)
+    let ratioSeries = closes;
+    if(benchmarkCloses && benchmarkCloses.length >= 10){
+      const bm = benchmarkCloses;
+      const sLen = closes.length, bLen = bm.length;
+      const useLen = Math.min(sLen, bLen);
+      // normalize both to same start point then divide
+      const sBase = closes[sLen-useLen], bBase = bm[bLen-useLen];
+      ratioSeries = closes.slice(sLen-useLen).map((c,i) => {
+        const bVal = bm[bLen-useLen+i];
+        return bVal ? (c/sBase) / (bVal/bBase) : 1;
+      });
+    }
+    const rs=calcRS(closes),pf=calcPF(ratioSeries),ttm=calcTTM(closes,highs,lows),rrg=calcRRG(closes),rsiS=calcRSIStats(closes),rrgH=calcRRGHistory(closes);
     stocks.push({ticker,name,closes,rs,price,pfTrend:pf.trend,pfSignal:pf.signal,
       sqState:ttm.state,sqMomDir:ttm.momDir,sqHistory:ttm.history,
       rrgRatio:rrg.ratio,rrgMomentum:rrg.momentum,sector:getSector(ticker),
       isAdded:addedTickers.includes(ticker),isIBD:ibdList.includes(ticker),
-      rsi7:rsiS.rsi7,rsi20:rsiS.rsi20,rsi20ma:rsiS.rsi20ma,rsi20prev:rsiS.rsi20prev});
+      rsi7:rsiS.rsi7,rsi20:rsiS.rsi20,rsi20ma:rsiS.rsi20ma,rsi20prev:rsiS.rsi20prev,
+      rrgArrow:rrgH.arrow,rrgWeeks:rrgH.weeksInQuad,rrgHistory:rrgH.history});
   }
   const sorted=[...stocks].sort((a,b)=>a.rs-b.rs);
   sorted.forEach((s,i)=>{s.rsPerc=Math.round((i/(sorted.length-1||1))*100);s.dwaRank=rank(s.rsPerc);});
@@ -604,7 +690,7 @@ function applyFilters(){
 function renderTable(data){
   const tb=document.getElementById('tableBody');
   if(!data.length){
-    tb.innerHTML=`<tr><td colspan="13"><div class="no-data">NO STOCKS MATCH FILTERS<br><span style="font-size:10px;color:var(--muted)">Adjust rank, P&F, or squeeze filters</span></div></td></tr>`;
+    tb.innerHTML=`<tr><td colspan="12"><div class="no-data">NO STOCKS MATCH FILTERS<br><span style="font-size:10px;color:var(--muted)">Adjust rank, P&F, or squeeze filters</span></div></td></tr>`;
     return;
   }
   const maxRS=Math.max(...data.map(s=>Math.abs(s.rs)));
@@ -628,12 +714,23 @@ function renderTable(data){
       <td><span class="pfsig ${s.pfTrend==='up'?'pfbuy':'pfsell'}">${s.pfSignal}</span></td>
       <td><div class="sq-cell"><div class="sq-dot-cell ${sdcls}"></div><span class="sqlbl" style="color:${slcol}">${SL[s.sqState]||'—'}</span></div></td>
       <td><span style="font-family:'Space Mono',monospace;font-size:10px;color:${mcol}">${msym} ${s.sqMomDir==='flat'?'flat':s.sqMomDir}</span></td>
-      <td style="font-family:'Space Mono',monospace;font-size:11px;color:${s.rs>=0?'var(--green)':'var(--red)'}">${(s.rs*100).toFixed(1)}%</td>
       <td>
         <div style="font-family:'Space Mono',monospace;font-size:10px">${s.rsPerc||0}p</div>
         <div class="rs-bar-track"><div class="rs-bar-fill" style="width:${rsW}%;background:${s.rs>=0?'var(--green)':'var(--red)'}"></div></div>
       </td>
-      <td><span class="rrg-quad ${QC[q]||''}">${q.substring(0,4)}</span></td>
+      <td>
+        <div class="rrg-cell">
+          <div class="rrg-top">
+            <span class="rrg-quad ${QC[q]||''}">${q.substring(0,4)}</span>
+            <span class="rrg-arrow">${s.rrgArrow||''}</span>
+            ${s.rrgWeeks?`<span class="rrg-weeks" style="color:${s.rrgWeeks<=4?'var(--green)':s.rrgWeeks<=12?'var(--accent2)':'var(--red)'}">${s.rrgWeeks}w</span>`:''}
+          </div>
+          <div class="rrg-spark">${(s.rrgHistory||[]).map(h=>{
+            const dc=h==='Leading'?'#00d4aa':h==='Improving'?'#748ffc':h==='Weakening'?'#f5a623':'#ff4757';
+            return `<div class="spark-dot" style="background:${dc}" title="${h||'?'}"></div>`;
+          }).join('')}</div>
+        </div>
+      </td>
       <td><span style="font-family:'Space Mono',monospace;font-size:11px;font-weight:700;color:${rsi7Color(s.rsi7)}">${s.rsi7!==null?s.rsi7.toFixed(1):'—'}</span></td>
       <td>
         <span style="font-family:'Space Mono',monospace;font-size:11px;font-weight:700;color:${rsi20Color(s.rsi20,s.rsi20ma,s.rsi20prev)}">${s.rsi20!==null?s.rsi20.toFixed(1):'—'}</span>
@@ -686,13 +783,13 @@ function showDetail(ticker){
     <div class="det-name">${s.name}</div>
     <div class="det-grid">
       <div class="det-item"><div class="det-lbl">DWA Rank</div><div class="det-val" style="color:${rc}">${s.dwaRank}/5</div></div>
-      <div class="det-item"><div class="det-lbl">P&F Trend</div><div class="det-val" style="color:${s.pfTrend==='up'?'var(--green)':'var(--red)'}">${s.pfTrend==='up'?'▲ UP':'▼ DOWN'}</div></div>
+      <div class="det-item"><div class="det-lbl">Relative P&F</div><div class="det-val" style="color:${s.pfTrend==='up'?'var(--green)':'var(--red)'}">${s.pfTrend==='up'?'▲ UP':'▼ DOWN'}</div></div>
       <div class="det-item"><div class="det-lbl">TTM Squeeze</div><div class="det-val" style="color:${sqCol};font-size:12px">${sqLbl}</div></div>
       <div class="det-item"><div class="det-lbl">Momentum</div><div class="det-val" style="color:${s.sqMomDir==='up'?'var(--green)':'var(--red)'};font-size:12px">${s.sqMomDir==='up'?'▲ Rising':s.sqMomDir==='down'?'▼ Falling':'Flat'}</div></div>
       <div class="det-item"><div class="det-lbl">RS Score</div><div class="det-val" style="color:${s.rs>=0?'var(--green)':'var(--red)'}">${(s.rs*100).toFixed(1)}%</div></div>
       <div class="det-item"><div class="det-lbl">RS Percentile</div><div class="det-val">${s.rsPerc}p</div></div>
-      <div class="det-item"><div class="det-lbl">P&F Signal</div><div class="det-val" style="font-size:11px">${s.pfSignal}</div></div>
-      <div class="det-item"><div class="det-lbl">RRG Quad</div><div class="det-val" style="font-size:11px">${q}</div></div>
+      <div class="det-item"><div class="det-lbl">Rel P&F Signal</div><div class="det-val" style="font-size:11px">${s.pfSignal}</div></div>
+      <div class="det-item"><div class="det-lbl">RRG Quad</div><div class="det-val" style="font-size:11px">${q} ${s.rrgArrow||''} ${s.rrgWeeks?`<span style="font-size:10px;color:var(--muted)">${s.rrgWeeks}w</span>`:''}</div></div>
       <div class="det-item"><div class="det-lbl">RSI 7</div><div class="det-val" style="color:${rsi7Color(s.rsi7)}">${s.rsi7!==null?s.rsi7.toFixed(1):'—'}</div></div>
       <div class="det-item"><div class="det-lbl">RSI 20 / 20MA</div><div class="det-val" style="color:${rsi20Color(s.rsi20,s.rsi20ma,s.rsi20prev)};font-size:13px">${s.rsi20!==null?s.rsi20.toFixed(1):'—'} <span style="font-size:10px;color:var(--muted)">/ ${s.rsi20ma!==null?s.rsi20ma.toFixed(1):'—'}</span></div></div>
     </div>
@@ -706,7 +803,7 @@ function showDetail(ticker){
     </div>
     <div style="margin-top:10px;font-size:11px;color:var(--muted);line-height:1.9;background:var(--surface2);border:1px solid var(--border);padding:11px">
       <b style="color:var(--label);font-family:'Space Mono',monospace;font-size:10px">3-LAYER CHECK</b><br>
-      ${s.pfTrend==='up'?'✅':'❌'} P&F Uptrend<br>
+      ${s.pfTrend==='up'?'✅':'❌'} Relative P&F Uptrend<br>
       ${s.dwaRank>=3?'✅':'❌'} DWA Rank ≥ 3 &nbsp;<span style="color:var(--muted)">(is ${s.dwaRank})</span><br>
       ${s.sqState==='fire'?'✅':s.sqState==='on'?'⏳':'❌'} TTM: ${s.sqState==='fire'?'Firing':'Coiled' +
         (s.sqState==='on'?' — building':'not active')}
@@ -716,6 +813,11 @@ function showDetail(ticker){
 function closeDetail(){document.getElementById('detailPanel').classList.remove('open');}
 
 // ── CONTROLS ───────────────────────────────────────
+function setBenchmark(bm){
+  benchmarkMode=bm;
+  document.querySelectorAll('[data-bm]').forEach(t=>t.classList.toggle('active',t.dataset.bm===bm));
+  loadAll();
+}
 function setUniverse(u){
   currentUniverse=u;
   document.querySelectorAll('.utab').forEach(t=>t.classList.toggle('active',t.dataset.u===u));
