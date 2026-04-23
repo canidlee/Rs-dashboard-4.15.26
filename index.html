@@ -283,11 +283,11 @@
 
   <div class="summary-bar">
     <div class="scard"><div class="scard-label">In Universe</div><div class="scard-value" id="st-total">—</div><div class="scard-sub">stocks loaded</div></div>
-    <div class="scard"><div class="scard-label">Rel P&F ↑</div><div class="scard-value" style="color:var(--green)" id="st-up">—</div><div class="scard-sub">bullish P&F</div></div>
-    <div class="scard"><div class="scard-label">Rank ≥ 3</div><div class="scard-value" style="color:var(--accent2)" id="st-r3">—</div><div class="scard-sub">DWA buy zone</div></div>
-    <div class="scard"><div class="scard-label">↑ + Rank≥3</div><div class="scard-value" style="color:var(--accent)" id="st-both">—</div><div class="scard-sub">both criteria</div></div>
-    <div class="scard"><div class="scard-label">Sq. Firing</div><div class="scard-value" style="color:var(--sq-fire)" id="st-fire">—</div><div class="scard-sub">TTM breakout</div></div>
-    <div class="scard"><div class="scard-label">All 3 Layers</div><div class="scard-value" style="color:#fff;font-size:20px" id="st-all3">—</div><div class="scard-sub">↑ + ≥3 + firing</div></div>
+    <div class="scard" style="cursor:pointer" title="Click to filter" onclick="filterByCard('up')"><div class="scard-label">Rel P&F ↑</div><div class="scard-value" style="color:var(--green)" id="st-up">—</div><div class="scard-sub">click to filter</div></div>
+    <div class="scard" style="cursor:pointer" title="Click to filter" onclick="filterByCard('r3')"><div class="scard-label">Rank ≥ 3</div><div class="scard-value" style="color:var(--accent2)" id="st-r3">—</div><div class="scard-sub">click to filter</div></div>
+    <div class="scard" style="cursor:pointer" title="Click to filter" onclick="filterByCard('both')"><div class="scard-label">↑ + Rank≥3</div><div class="scard-value" style="color:var(--accent)" id="st-both">—</div><div class="scard-sub">click to filter</div></div>
+    <div class="scard" style="cursor:pointer" title="Click to filter" onclick="filterByCard('fire')"><div class="scard-label">Sq. Firing</div><div class="scard-value" style="color:var(--sq-fire)" id="st-fire">—</div><div class="scard-sub">click to filter</div></div>
+    <div class="scard" style="cursor:pointer;border-color:var(--accent)" title="Click to filter" onclick="filterByCard('all3')"><div class="scard-label">All 3 Layers</div><div class="scard-value" style="color:#fff;font-size:20px" id="st-all3">—</div><div class="scard-sub">click to filter ★</div></div>
   </div>
 
   <div class="sq-legend">
@@ -675,7 +675,15 @@ async function loadAll(){
     }
     // Use universe index as benchmark — forces sectors to distribute across all quadrants
     const srrg=calcJdKRRG(secIdx,uniIdx);
-    sectorRS[sec]={rs:ar,ratio:srrg.ratio,momentum:srrg.momentum,quad:quad(srrg.ratio,srrg.momentum)};
+    // Build 5-week tail: compute ratio/momentum at each of last 5 weeks
+    const WEEK=5, tail=[];
+    for(let w=4;w>=0;w--){
+      const sc=secIdx.slice(0,secIdx.length-w*WEEK||undefined);
+      const ub=uniIdx.slice(0,uniIdx.length-w*WEEK||undefined);
+      if(sc.length<52||ub.length<52){tail.push(null);continue;}
+      tail.push(calcJdKRRG(sc,ub));
+    }
+    sectorRS[sec]={rs:ar,ratio:srrg.ratio,momentum:srrg.momentum,quad:quad(srrg.ratio,srrg.momentum),tail};
   }
 
   setStatus("Rendering..."); await tick();
@@ -712,6 +720,23 @@ function drawRRG(){
   const qc={'Leading':'#00d4aa','Weakening':'#f5a623','Lagging':'#ff4757','Improving':'#748ffc'};
   for(const[sec,d]of Object.entries(sectorRS)){
     const x=tx(d.ratio),y=ty(d.momentum),col=qc[d.quad]||'#888';
+    // Draw 5-week tail
+    if(d.tail&&d.tail.length){
+      const pts=d.tail.filter(t=>t).map(t=>({x:tx(t.ratio),y:ty(t.momentum)}));
+      pts.push({x,y}); // add current position
+      if(pts.length>1){
+        for(let i=1;i<pts.length;i++){
+          const alpha=Math.round((i/pts.length)*160).toString(16).padStart(2,'0');
+          ctx.strokeStyle=col+alpha;
+          ctx.lineWidth=1.5;
+          ctx.beginPath();ctx.moveTo(pts[i-1].x,pts[i-1].y);ctx.lineTo(pts[i].x,pts[i].y);ctx.stroke();
+          // small dot at each tail point
+          ctx.beginPath();ctx.arc(pts[i-1].x,pts[i-1].y,2.5,0,Math.PI*2);
+          ctx.fillStyle=col+alpha;ctx.fill();
+        }
+      }
+    }
+    // Current position dot
     ctx.beginPath();ctx.arc(x,y,7,0,Math.PI*2);ctx.fillStyle=col+'33';ctx.fill();
     ctx.strokeStyle=col;ctx.lineWidth=1.5;ctx.stroke();
     ctx.fillStyle=col;ctx.font='bold 9px Space Mono';ctx.fillText(sec.substring(0,6),x+9,y+4);
@@ -891,6 +916,28 @@ function toggleUniverse(u){
   saveState();
   document.querySelectorAll('.utab').forEach(t=>t.classList.toggle('active',activeUniverses.has(t.dataset.u)));
   if(allStocks.length){ loadAll(); } // reload to fetch any new tickers
+}
+function filterByCard(type){
+  // Reset all filters first
+  document.getElementById('pfFilter').value='all';
+  activeSq=new Set();
+  activeRanks=new Set([1,2,3,4,5]);
+  document.querySelectorAll('.rpip').forEach(p=>p.className=`rpip a${p.dataset.r}`);
+  document.querySelectorAll('.sqpip').forEach(p=>p.className='sqpip');
+  document.getElementById('searchBox').value='';
+  // Apply specific filter
+  if(type==='up')   document.getElementById('pfFilter').value='up';
+  if(type==='r3')   {activeRanks=new Set([3,4,5]);[1,2].forEach(r=>document.querySelector(`.rpip[data-r="${r}"]`).className='rpip');}
+  if(type==='both') {document.getElementById('pfFilter').value='up';activeRanks=new Set([3,4,5]);[1,2].forEach(r=>document.querySelector(`.rpip[data-r="${r}"]`).className='rpip');}
+  if(type==='fire') {activeSq=new Set(['fire']);document.querySelector('.sqpip[data-sq="fire"]').className='sqpip afire';}
+  if(type==='all3') {
+    document.getElementById('pfFilter').value='up';
+    activeRanks=new Set([3,4,5]);[1,2].forEach(r=>document.querySelector(`.rpip[data-r="${r}"]`).className='rpip');
+    activeSq=new Set(['fire']);document.querySelector('.sqpip[data-sq="fire"]').className='sqpip afire';
+  }
+  applyFilters();
+  // Scroll table into view
+  document.querySelector('table').scrollIntoView({behavior:'smooth',block:'start'});
 }
 function setSort(s){
   if(sortBy===s)sortDir*=-1;else{sortBy=s;sortDir=-1;}
