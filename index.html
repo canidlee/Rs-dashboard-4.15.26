@@ -898,6 +898,9 @@ function setBenchmark(bm){
   document.querySelectorAll('[data-bm]').forEach(t=>t.classList.toggle('active',t.dataset.bm===bm));
   loadAll();
 }
+function syncUniverseTabs(){
+  document.querySelectorAll('.utab').forEach(t=>t.classList.toggle('active',activeUniverses.has(t.dataset.u)));
+}
 function toggleUniverse(u){
   if(activeUniverses.has(u)) {
     if(activeUniverses.size>1) activeUniverses.delete(u); // keep at least one active
@@ -905,7 +908,7 @@ function toggleUniverse(u){
     activeUniverses.add(u);
   }
   saveState();
-  document.querySelectorAll('.utab').forEach(t=>t.classList.toggle('active',activeUniverses.has(t.dataset.u)));
+  syncUniverseTabs();
   if(allStocks.length){ loadAll(); } // reload to fetch any new tickers
 }
 function filterByCard(type){
@@ -949,20 +952,23 @@ function addTickers(){
   const ts=raw.toUpperCase().split(/[\s,\n;]+/).filter(t=>/^[A-Z]{1,5}(-[A-Z])?$/.test(t));
   if(!ts.length){alert('No valid tickers found.');return;}
   addedTickers=[...new Set([...addedTickers,...ts])];
+  activeUniverses.add('watch');
   saveState();
   document.getElementById('addedNote').textContent=addedTickers.length+' custom tickers saved';
   document.getElementById('cnt-watch').textContent=addedTickers.length;
   document.getElementById('addBox').value='';
+  syncUniverseTabs();
   loadAll();
 }
 function clearAdded(){
   if(!addedTickers.length)return;
   if(!confirm(`Remove all ${addedTickers.length} custom tickers?`))return;
   addedTickers=[];
+  activeUniverses.delete('watch');
   saveState();
   document.getElementById('addedNote').textContent='0 custom tickers';
   document.getElementById('cnt-watch').textContent='—';
-  activeUniverses.delete('watch');saveState();
+  syncUniverseTabs();
   loadAll();
 }
 function parseIBD(){
@@ -970,9 +976,10 @@ function parseIBD(){
   const ts=raw.toUpperCase().split(/[\s,\n]+/).filter(t=>/^[A-Z]{1,5}(-[A-Z])?$/.test(t));
   if(!ts.length){alert('No valid tickers found.');return;}
   ibdList=ts;
+  activeUniverses.add('ibd');
   saveState();
   document.getElementById('cnt-ibd').textContent=ts.length;
-  activeUniverses.add('ibd');saveState();
+  syncUniverseTabs();
   loadAll();
 }
 function setStatus(m){document.getElementById('loadingStatus').textContent=m;}
@@ -981,7 +988,7 @@ function tick(){return new Promise(r=>setTimeout(r,0));}
 (function(){
   if(addedTickers.length){document.getElementById("addedNote").textContent=addedTickers.length+" custom tickers saved";document.getElementById("cnt-watch").textContent=addedTickers.length;}
   if(ibdList.length){document.getElementById("cnt-ibd").textContent=ibdList.length;}
-  document.querySelectorAll(".utab").forEach(t=>t.classList.toggle("active",activeUniverses.has(t.dataset.u)));
+  syncUniverseTabs();
 })();
 loadAll();
 </script>
