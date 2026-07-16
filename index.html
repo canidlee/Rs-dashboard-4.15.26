@@ -553,13 +553,26 @@ async function fetchStock(t){
     return{closes:cl,highs:hi,lows:lo,name:res.meta?.shortName||t,price:res.meta?.regularMarketPrice||0};
   }catch{return null;}
 }
+const STOCK_CACHE_TTL_MS=15*60*1000; // 15 min — session-only, cleared on page reload
+let stockCache={}; // ticker -> {closes,highs,lows,name,price,fetchedAt}
+function isCacheFresh(t,now=Date.now()){
+  const c=stockCache[t];
+  return !!c&&(now-c.fetchedAt)<=STOCK_CACHE_TTL_MS;
+}
+async function fetchStockCached(t){
+  if(isCacheFresh(t))return stockCache[t];
+  const d=await fetchStock(t);
+  if(d){d.fetchedAt=Date.now();stockCache[t]=d;}
+  return d;
+}
 async function fetchBatch(tickers,onProg){
   const out={};const C=10; // slightly larger chunks now that we have timeouts
   for(let i=0;i<tickers.length;i+=C){
     const chunk=tickers.slice(i,i+C);
-    await Promise.all(chunk.map(async t=>{const d=await fetchStock(t);if(d)out[t]=d;}));
+    const chunkNeedsFetch=chunk.some(t=>!isCacheFresh(t));
+    await Promise.all(chunk.map(async t=>{const d=await fetchStockCached(t);if(d)out[t]=d;}));
     onProg(Math.min(i+C,tickers.length),tickers.length);
-    await new Promise(r=>setTimeout(r,80));
+    if(chunkNeedsFetch) await new Promise(r=>setTimeout(r,80));
   }
   return out;
 }
@@ -576,25 +589,32 @@ async function loadAll(){
   tickers=[...new Set(tickers)];
   if(!tickers.length) tickers=[...R1000]; // fallback
   setStatus('Fetching SPY for RRG...');
-  const spyFetch = await fetchStock('SPY');
+  const spyFetch = await fetchStockCached('SPY');
   spyCloses = spyFetch ? spyFetch.closes : null;
   if(benchmarkMode === 'spy'){
     benchmarkCloses = spyCloses;
   } else if(benchmarkMode === 'qqq'){
     setStatus('Fetching QQQ benchmark...');
-    const qqqData = await fetchStock('QQQ');
+    const qqqData = await fetchStockCached('QQQ');
     benchmarkCloses = qqqData ? qqqData.closes : null;
   } else {
     benchmarkCloses = null; // universe mode — built after fetch
   }
-  setStatus(`Fetching ${tickers.length} stocks...`);
+  const staleCount=tickers.filter(t=>!isCacheFresh(t)).length;
+  setStatus(staleCount<tickers.length
+    ? `Fetching ${staleCount} new (${tickers.length-staleCount} cached) of ${tickers.length} stocks...`
+    : `Fetching ${tickers.length} stocks...`);
   let data;
   try{ data=await fetchBatch(tickers,(d,t)=>setStatus(`Fetching... ${d}/${t}`)); }
   catch(e){ showErr("Fetch failed. Check connection."); done(btn); return; }
+  if(!Object.keys(data).length){
+    showErr("All ticker fetches failed — the free CORS proxy may be down or rate-limited. Try REFRESH again in a moment.");
+    done(btn); return;
+  }
   setStatus("Computing P&F, TTM, RS..."); await tick();
   if(benchmarkMode === 'universe'){
     const allC = Object.values(data).map(d=>d.closes).filter(c=>c.length>0);
-    const minLen = Math.min(...allC.map(c=>c.length));
+    const minLen = allC.length?Math.min(...allC.map(c=>c.length)):0;
     const idx = [];
     for(let i=0;i<minLen;i++){
       const avg = allC.reduce((s,c)=>s+(c[c.length-minLen+i]/c[c.length-minLen]),0)/allC.length;
@@ -606,7 +626,7 @@ async function loadAll(){
   const sectorIndices = buildSectorIndices(data);
   const stocks=[];
   for(const[ticker,d]of Object.entries(data)){
-    const{closes,highs,lows,name,price}=d;
+    const{closes,highs,lows,name,price,fetchedAt}=d;
     let ratioSeries = closes;
     if(benchmarkCloses && benchmarkCloses.length >= 10){
       const bm = benchmarkCloses;
@@ -631,14 +651,14 @@ async function loadAll(){
       momDuration:rsiS.momDuration,momDir:rsiS.momDir,
       rrgArrow:rrgH.arrow,rrgWeeks:rrgH.weeksInQuad,rrgHistory:rrgH.history,
       dwaRank:rsScoreResult.score,rsComponents:rsScoreResult.components,
-      rsPfMkt:rsScoreResult.pfMkt,rsPfPeer:rsScoreResult.pfPeer});
+      rsPfMkt:rsScoreResult.pfMkt,rsPfPeer:rsScoreResult.pfPeer,fetchedAt});
   }
   const sorted=[...stocks].sort((a,b)=>a.rs-b.rs);
   sorted.forEach((s,i)=>{s.rsPerc=Math.round((i/(sorted.length-1||1))*100);});
   allStocks=stocks;
   setStatus("Sector RS..."); await tick();
   const uniAllC = stocks.map(s=>s.closes).filter(c=>c.length>0);
-  const uniMinLen = Math.min(...uniAllC.map(c=>c.length));
+  const uniMinLen = uniAllC.length?Math.min(...uniAllC.map(c=>c.length)):0;
   const uniIdx = [];
   for(let i=0;i<uniMinLen;i++){
     uniIdx.push(uniAllC.reduce((s,c)=>s+(c[c.length-uniMinLen+i]/c[c.length-uniMinLen]),0)/uniAllC.length);
@@ -872,9 +892,15 @@ function showDetail(ticker){
       <div style="font-family:'Space Mono',monospace;font-size:9px;color:var(--muted);letter-spacing:.1em;text-transform:uppercase;margin-bottom:4px">TTM Momentum History (20 bars) — faded = squeeze active</div>
       <div class="mom-bars">${bars}</div>
     </div>
-    <div style="margin-top:10px;background:var(--surface2);border:1px solid var(--border);padding:11px">
-      <div style="font-family:'Space Mono',monospace;font-size:9px;color:var(--muted);letter-spacing:.1em;text-transform:uppercase;margin-bottom:4px">Price</div>
-      <div style="font-family:'Space Mono',monospace;font-size:20px;font-weight:700">$${s.price.toFixed(2)}</div>
+    <div style="margin-top:10px;background:var(--surface2);border:1px solid var(--border);padding:11px;display:flex;justify-content:space-between;align-items:center">
+      <div>
+        <div style="font-family:'Space Mono',monospace;font-size:9px;color:var(--muted);letter-spacing:.1em;text-transform:uppercase;margin-bottom:4px">Price</div>
+        <div style="font-family:'Space Mono',monospace;font-size:20px;font-weight:700">$${s.price.toFixed(2)}</div>
+      </div>
+      <div style="text-align:right">
+        <div style="font-family:'Space Mono',monospace;font-size:9px;color:var(--muted);letter-spacing:.1em;text-transform:uppercase;margin-bottom:4px">Data As Of</div>
+        <div style="font-family:'Space Mono',monospace;font-size:12px">${s.fetchedAt?new Date(s.fetchedAt).toLocaleTimeString():'—'}</div>
+      </div>
     </div>
     <div style="margin-top:10px;font-size:11px;color:var(--muted);line-height:1.9;background:var(--surface2);border:1px solid var(--border);padding:11px">
       <b style="color:var(--label);font-family:'Space Mono',monospace;font-size:10px">RS SCORE BREAKDOWN (${s.dwaRank}/5)</b><br>
