@@ -280,6 +280,7 @@
       <span class="pill"        data-s="rsi20"   onclick="setSort('rsi20')">RSI 20</span>
       <span class="pill"        data-s="ticker"  onclick="setSort('ticker')">Ticker</span>
       <span class="pill"        data-s="pf"      onclick="setSort('pf')">P&F</span>
+      <span class="pill" onclick="exportCSV()" style="margin-left:auto">⬇ EXPORT CSV</span>
     </div>
     <div style="overflow-x:auto">
       <table>
@@ -338,7 +339,7 @@ const SECTORS = {
   "Util/RE":    ["NEE","DUK","SO","D","AEP","AMT","PLD","SPG","O","WELL"]
 };
 function getSector(t){ for(const[s,ts]of Object.entries(SECTORS))if(ts.includes(t))return s; return "Other"; }
-let allStocks=[], sectorRS={}, spyCloses=null, benchmarkCloses=null;
+let allStocks=[], sectorRS={}, spyCloses=null, benchmarkCloses=null, currentFiltered=[];
 let benchmarkMode='universe'; // 'universe' | 'spy' | 'qqq'
 let sortBy="rank", sortDir=-1;
 let activeRanks=new Set([3,4,5]), activeSq=new Set();
@@ -849,8 +850,34 @@ function applyFilters(){
     if(sortBy==='rsi20')  return sortDir*((b.rsi20||0)-(a.rsi20||0));
     return 0;
   });
+  currentFiltered=data;
   renderTable(data);
   updateStats();
+}
+function csvField(v){
+  const s=String(v??'');
+  return /[",\n]/.test(s) ? '"'+s.replace(/"/g,'""')+'"' : s;
+}
+function exportCSV(){
+  if(!currentFiltered.length){ alert('No rows to export — adjust your filters first.'); return; }
+  const cols=['Ticker','Name','Price','RS Score','Sector','Rel P&F Trend','Rel P&F Signal',
+    'TTM Squeeze','RSI 7','RSI 20','RSI 20 MA','Momentum %','RRG Quadrant','Data As Of'];
+  const rows=currentFiltered.map(s=>[
+    s.ticker, s.name, s.price.toFixed(2), s.dwaRank, s.sector,
+    s.pfTrend, s.pfSignal, s.sqState, s.rsi7!=null?s.rsi7.toFixed(1):'',
+    s.rsi20!=null?s.rsi20.toFixed(1):'', s.rsi20ma!=null?s.rsi20ma.toFixed(1):'',
+    (s.rs*100).toFixed(1), quad(s.rrgRatio,s.rrgMomentum),
+    s.fetchedAt?new Date(s.fetchedAt).toLocaleString():''
+  ]);
+  const csv=[cols,...rows].map(r=>r.map(csvField).join(',')).join('\r\n');
+  const blob=new Blob([csv],{type:'text/csv;charset=utf-8;'});
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement('a');
+  const ts=new Date();
+  const stamp=`${ts.getFullYear()}-${String(ts.getMonth()+1).padStart(2,'0')}-${String(ts.getDate()).padStart(2,'0')}_${String(ts.getHours()).padStart(2,'0')}${String(ts.getMinutes()).padStart(2,'0')}`;
+  a.href=url; a.download=`rs-dashboard_${stamp}.csv`;
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  URL.revokeObjectURL(url);
 }
 function renderTable(data){
   const tb=document.getElementById('tableBody');
