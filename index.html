@@ -351,6 +351,21 @@ function saveState(){
   localStorage.setItem("rsc_ibd",JSON.stringify(ibdList));
   localStorage.setItem("rsc_universes",JSON.stringify([...activeUniverses]));
 }
+// Persists a slimmed copy (no raw price history — that's the bulk of the size)
+// of the last successful load, so a totally-failed fetch on a fresh page load
+// can still show your last-known data instead of a blank table.
+function saveLastGoodSnapshot(stocks){
+  try{
+    const slim=stocks.map(({closes,...rest})=>rest);
+    localStorage.setItem("rsc_lastGood",JSON.stringify({stocks:slim,savedAt:Date.now()}));
+  }catch(e){ /* quota or serialization issue — snapshot is a nice-to-have, skip silently */ }
+}
+function loadLastGoodSnapshot(){
+  try{
+    const parsed=JSON.parse(localStorage.getItem("rsc_lastGood"));
+    return(parsed&&Array.isArray(parsed.stocks)&&parsed.stocks.length)?parsed:null;
+  }catch(e){ return null; }
+}
 function calcTTM(closes, highs, lows) {
   const N=20;
   if(!closes||closes.length<N+5) return {state:'unknown',momDir:'flat',history:[]};
@@ -621,6 +636,16 @@ async function loadAll(){
   catch(e){ showErr("Fetch failed. Check connection."); done(btn); return; }
   if(!Object.keys(data).length){
     const reasons=[...new Set(lastFetchErrors)].slice(0,4).join(' | ')||'no response details captured';
+    if(!allStocks.length){
+      const cached=loadLastGoodSnapshot();
+      if(cached){
+        allStocks=cached.stocks;
+        updateStats(); applyFilters();
+        document.getElementById('lastUpdated').innerHTML=`⚠ STALE — showing data cached ${new Date(cached.savedAt).toLocaleString()}. Refresh failed: [${reasons}]`;
+        showErr(`Live refresh failed — [${reasons}]. Showing your last successfully loaded data instead (cached ${new Date(cached.savedAt).toLocaleTimeString()}).`);
+        done(btn); return;
+      }
+    }
     showErr(`All ticker fetches failed — [${reasons}]. This is the data source rejecting/timing out, not a page bug. Try REFRESH again in a moment.`);
     done(btn); return;
   }
@@ -669,6 +694,7 @@ async function loadAll(){
   const sorted=[...stocks].sort((a,b)=>a.rs-b.rs);
   sorted.forEach((s,i)=>{s.rsPerc=Math.round((i/(sorted.length-1||1))*100);});
   allStocks=stocks;
+  saveLastGoodSnapshot(stocks);
   setStatus("Sector RS..."); await tick();
   const uniAllC = stocks.map(s=>s.closes).filter(c=>c.length>0);
   const uniMinLen = uniAllC.length?Math.min(...uniAllC.map(c=>c.length)):0;
