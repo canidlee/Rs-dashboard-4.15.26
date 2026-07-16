@@ -536,22 +536,33 @@ function fetchWithTimeout(url, ms=8000){
     new Promise((_,reject)=>setTimeout(()=>reject(new Error('timeout')),ms))
   ]);
 }
+let lastFetchErrors=[]; // diagnostic reasons from the most recent fetchBatch, for the "all failed" banner
 async function fetchStock(t){
   try{
     const base=`https://query1.finance.yahoo.com/v8/finance/chart/${t}?interval=1d&range=2y&_ts=${Date.now()}`;
     const proxy=`https://corsproxy.io/?url=${encodeURIComponent(base)}`;
-    let r;
-    try{ r=await fetchWithTimeout(proxy,6000); }
-    catch(e){ r=await fetchWithTimeout(base,6000); }
-    if(!r||!r.ok)return null;
+    let r=null,reason=null;
+    try{
+      r=await fetchWithTimeout(proxy,6000);
+      if(!r.ok){reason=`proxy HTTP ${r.status}`;r=null;}
+    }catch(e){ reason='proxy unreachable/timeout'; }
+    if(!r){
+      try{
+        const r2=await fetchWithTimeout(base,6000);
+        if(r2.ok){ r=r2; reason=null; }
+        else{ reason=(reason?reason+' | ':'')+`yahoo direct HTTP ${r2.status}`; }
+      }catch(e){ reason=(reason?reason+' | ':'')+'yahoo direct unreachable/timeout'; }
+    }
+    if(!r){ if(reason)lastFetchErrors.push(reason); return null; }
     const d=await r.json();
-    const res=d?.chart?.result?.[0]; if(!res)return null;
+    const res=d?.chart?.result?.[0];
+    if(!res){ lastFetchErrors.push('empty chart response'); return null; }
     const q=res.indicators?.quote?.[0];
     const cl=[],hi=[],lo=[];
     const rc=q?.close||[],rh=q?.high||[],rl=q?.low||[];
     for(let i=0;i<rc.length;i++){if(rc[i]!=null&&rh[i]!=null&&rl[i]!=null){cl.push(rc[i]);hi.push(rh[i]);lo.push(rl[i]);}}
     return{closes:cl,highs:hi,lows:lo,name:res.meta?.shortName||t,price:res.meta?.regularMarketPrice||0};
-  }catch{return null;}
+  }catch(e){ lastFetchErrors.push('exception: '+(e&&e.message||'unknown')); return null; }
 }
 const STOCK_CACHE_TTL_MS=15*60*1000; // 15 min — session-only, cleared on page reload
 let stockCache={}; // ticker -> {closes,highs,lows,name,price,fetchedAt}
@@ -605,10 +616,12 @@ async function loadAll(){
     ? `Fetching ${staleCount} new (${tickers.length-staleCount} cached) of ${tickers.length} stocks...`
     : `Fetching ${tickers.length} stocks...`);
   let data;
+  lastFetchErrors=[];
   try{ data=await fetchBatch(tickers,(d,t)=>setStatus(`Fetching... ${d}/${t}`)); }
   catch(e){ showErr("Fetch failed. Check connection."); done(btn); return; }
   if(!Object.keys(data).length){
-    showErr("All ticker fetches failed — the free CORS proxy may be down or rate-limited. Try REFRESH again in a moment.");
+    const reasons=[...new Set(lastFetchErrors)].slice(0,4).join(' | ')||'no response details captured';
+    showErr(`All ticker fetches failed — [${reasons}]. This is the data source rejecting/timing out, not a page bug. Try REFRESH again in a moment.`);
     done(btn); return;
   }
   setStatus("Computing P&F, TTM, RS..."); await tick();
