@@ -851,8 +851,8 @@ function applyFilters(){
     if(sortBy==='rs')     return sortDir*(b.rs-a.rs);
     if(sortBy==='ticker') return sortDir*a.ticker.localeCompare(b.ticker);
     if(sortBy==='price')  return sortDir*(b.price-a.price);
-    if(sortBy==='pf')     return sortDir*(a.pfTrend==='up'?-1:1);
-    if(sortBy==='squeeze')return sortDir*((sqO[a.sqState]||3)-(sqO[b.sqState]||3));
+    if(sortBy==='pf')     return sortDir*((a.pfTrend==='up'?0:1)-(b.pfTrend==='up'?0:1));
+    if(sortBy==='squeeze')return sortDir*((sqO[a.sqState]??3)-(sqO[b.sqState]??3));
     if(sortBy==='rsi7')   return sortDir*((b.rsi7||0)-(a.rsi7||0));
     if(sortBy==='rsi20')  return sortDir*((b.rsi20||0)-(a.rsi20||0));
     return 0;
@@ -889,7 +889,7 @@ function exportCSV(){
 function renderTable(data){
   const tb=document.getElementById('tableBody');
   if(!data.length){
-    tb.innerHTML=`<tr><td colspan="12"><div class="no-data">NO STOCKS MATCH FILTERS<br><span style="font-size:10px;color:var(--muted)">Adjust rank, P&F, or squeeze filters</span></div></td></tr>`;
+    tb.innerHTML=`<tr><td colspan="13"><div class="no-data">NO STOCKS MATCH FILTERS<br><span style="font-size:10px;color:var(--muted)">Adjust rank, P&F, or squeeze filters</span></div></td></tr>`;
     return;
   }
   const maxRS=Math.max(...data.map(s=>Math.abs(s.rs)));
@@ -1019,8 +1019,7 @@ function showDetail(ticker){
       <b style="color:var(--label);font-family:'Space Mono',monospace;font-size:10px">3-LAYER CHECK</b><br>
       ${s.pfTrend==='up'?'✅':'❌'} Relative P&F Uptrend<br>
       ${s.dwaRank>=3?'✅':'❌'} RS Score ≥ 3 &nbsp;<span style="color:var(--muted)">(is ${s.dwaRank}/5)</span><br>
-      ${s.sqState==='fire'?'✅':s.sqState==='on'?'⏳':'❌'} TTM: ${s.sqState==='fire'?'Firing':'Coiled' +
-        (s.sqState==='on'?' — building':'not active')}
+      ${s.sqState==='fire'?'✅':s.sqState==='on'?'⏳':'❌'} TTM: ${s.sqState==='fire'?'Firing':s.sqState==='on'?'Coiled — building':'Off — not active'}
     </div>`;
   document.getElementById('detailPanel').classList.add('open');
 }
