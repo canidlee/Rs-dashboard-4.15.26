@@ -466,12 +466,19 @@ function ema(arr, period){
   const k=2/(period+1); let e=arr[0];
   return arr.map(v=>(e=v*k+e*(1-k),e));
 }
+function toWeekly(arr){
+  if(!arr) return arr;
+  const out=[];
+  for(let i=arr.length-1;i>=0;i-=5){out.unshift(arr[i]);}
+  return out;
+}
 function calcJdKRRG(closes, benchCloses){
-  if(!closes||!benchCloses||closes.length<52||benchCloses.length<52)
-    return{ratio:100,momentum:100};
-  const len=Math.min(closes.length,benchCloses.length);
-  const s=closes.slice(closes.length-len);
-  const b=benchCloses.slice(benchCloses.length-len);
+  if(!closes||!benchCloses) return{ratio:100,momentum:100};
+  const wClose=toWeekly(closes), wBench=toWeekly(benchCloses);
+  if(wClose.length<52||wBench.length<52) return{ratio:100,momentum:100};
+  const len=Math.min(wClose.length,wBench.length);
+  const s=wClose.slice(wClose.length-len);
+  const b=wBench.slice(wBench.length-len);
   const rawRS=s.map((v,i)=>b[i]?(v/b[i])*100:100);
   const smoothRS=ema(rawRS,10);
   const mean52=smoothRS.slice(-52).reduce((a,c)=>a+c,0)/52;
@@ -744,11 +751,11 @@ async function loadAll(){
     for(let i=0;i<minLen;i++){
       secIdx.push(m.reduce((s,stk)=>s+(stk.closes[stk.closes.length-minLen+i]/stk.closes[stk.closes.length-minLen]),0)/m.length);
     }
-    const srrg=calcJdKRRG(secIdx,uniIdx);
+    const srrg=calcJdKRRG(secIdx,spyCloses);
     const WEEK=5, tail=[];
     for(let w=4;w>=0;w--){
       const sc=secIdx.slice(0,secIdx.length-w*WEEK||undefined);
-      const ub=uniIdx.slice(0,uniIdx.length-w*WEEK||undefined);
+      const ub=spyCloses.slice(0,spyCloses.length-w*WEEK||undefined);
       if(sc.length<52||ub.length<52){tail.push(null);continue;}
       tail.push(calcJdKRRG(sc,ub));
     }
