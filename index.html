@@ -132,6 +132,7 @@
   .sec-tag { font-size: 10px; color: var(--muted); background: var(--surface2); padding: 2px 5px; }
   .tag-ibd { font-size: 9px; font-family: 'Space Mono', monospace; padding: 1px 4px; border: 1px solid var(--accent2); color: var(--accent2); margin-left: 3px; }
   .tag-add { font-size: 9px; font-family: 'Space Mono', monospace; padding: 1px 4px; border: 1px solid #748ffc; color: #748ffc; margin-left: 3px; }
+  .tag-cross { font-size: 9px; font-family: 'Space Mono', monospace; font-weight: 700; padding: 1px 4px; border: 1px solid var(--green); color: var(--green); margin-left: 4px; background: rgba(0,212,170,0.12); white-space: nowrap; }
   .loading-overlay { position: fixed; inset: 0; background: rgba(10,12,15,0.93); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px; z-index: 999; }
   .loading-overlay.hidden { display: none; }
   .spinner { width: 36px; height: 36px; border: 2px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin 0.7s linear infinite; }
@@ -298,6 +299,7 @@
       <span class="pill"        data-s="rsi20"   onclick="setSort('rsi20')">RSI 20</span>
       <span class="pill"        data-s="ticker"  onclick="setSort('ticker')">Ticker</span>
       <span class="pill"        data-s="pf"      onclick="setSort('pf')">P&F</span>
+      <span class="pill"        data-s="cross"   onclick="setSort('cross')">RS✚ Cross</span>
       <span class="pill" onclick="exportCSV()" style="margin-left:auto">⬇ EXPORT CSV</span>
       <span class="pill" onclick="exportSignals()" title="Firing/coiled stocks + leading/improving sectors, date-stamped for tracking">⬇ EXPORT SIGNALS</span>
     </div>
@@ -483,6 +485,20 @@ function calcRSScore(closes,spyCloses,sectorIdx){
   const score=components.priceTrend+components.rsColumnMkt+components.rsSignalMkt+components.rsColumnPeer+components.rsSignalPeer;
   return{score,components,pfMkt,pfPeer};
 }
+// Bars since RS Score last crossed UP to >=4 (0 = crossed on the latest bar). Returns null
+// if current score <4, or if it's been >=4 longer than `lookback` bars (i.e. not a fresh cross).
+// This "fresh RS>=4 cross" tested as the most robust signal in scripts/backtest.js.
+function rs4CrossBarsAgo(closes,spyCloses,sectorIdx,lookback=10){
+  if(calcRSScore(closes,spyCloses,sectorIdx).score<4) return null;
+  for(let n=1;n<=lookback;n++){
+    const c=closes.slice(0,closes.length-n);
+    const sp=spyCloses?spyCloses.slice(0,spyCloses.length-n):null;
+    const si=sectorIdx?sectorIdx.slice(0,sectorIdx.length-n):null;
+    if(calcRSScore(c,sp,si).score<4) return n-1; // crossed (n-1) bars ago
+  }
+  return null; // has been >=4 for the whole window — not a fresh cross
+}
+const RS4_CROSS_FRESH=5; // "fresh" = crossed within the last 5 trading days (~1 week)
 function quad(r,m){return r>=100&&m>=100?'Leading':r>=100?'Weakening':m<100?'Lagging':'Improving';}
 function ema(arr, period){
   const k=2/(period+1); let e=arr[0];
@@ -751,6 +767,7 @@ async function loadAll(){
     const rrg=calcJdKRRG(closes,spyCloses),rsiS=calcRSIStats(closes),rrgH=calcRRGHistory(closes,spyCloses);
     const sector=getSector(ticker);
     const rsScoreResult=calcRSScore(closes,spyCloses,sectorIndices[sector]);
+    const rs4Cross=rsScoreResult.score>=4?rs4CrossBarsAgo(closes,spyCloses,sectorIndices[sector]):null;
     stocks.push({ticker,name,closes,rs,price,pfTrend:pf.trend,pfSignal:pf.signal,
       pfSignalBarsAgo:pf.signalBarsAgo,
       sqState:ttm.state,sqMomDir:ttm.momDir,sqHistory:ttm.history,
@@ -759,7 +776,7 @@ async function loadAll(){
       rsi7:rsiS.rsi7,rsi20:rsiS.rsi20,rsi20ma:rsiS.rsi20ma,rsi20prev:rsiS.rsi20prev,
       momDuration:rsiS.momDuration,momDir:rsiS.momDir,
       rrgArrow:rrgH.arrow,rrgWeeks:rrgH.weeksInQuad,rrgHistory:rrgH.history,
-      dwaRank:rsScoreResult.score,rsComponents:rsScoreResult.components,
+      dwaRank:rsScoreResult.score,rs4Cross,rsComponents:rsScoreResult.components,
       rsPfMkt:rsScoreResult.pfMkt,rsPfPeer:rsScoreResult.pfPeer,fetchedAt});
   }
   const sorted=[...stocks].sort((a,b)=>a.rs-b.rs);
@@ -910,6 +927,7 @@ function applyFilters(){
     if(sortBy==='ticker') return sortDir*a.ticker.localeCompare(b.ticker);
     if(sortBy==='price')  return sortDir*(b.price-a.price);
     if(sortBy==='pf')     return sortDir*((a.pfTrend==='up'?0:1)-(b.pfTrend==='up'?0:1));
+    if(sortBy==='cross'){const ck=s=>(s.rs4Cross!=null&&s.rs4Cross<=RS4_CROSS_FRESH)?s.rs4Cross:999; return sortDir*(ck(b)-ck(a));}
     if(sortBy==='squeeze')return sortDir*((sqO[a.sqState]??3)-(sqO[b.sqState]??3));
     if(sortBy==='rsi7')   return sortDir*((b.rsi7||0)-(a.rsi7||0));
     if(sortBy==='rsi20')  return sortDir*((b.rsi20||0)-(a.rsi20||0));
@@ -966,6 +984,13 @@ function exportSignals(){
     s.sqState==='fire'?'FIRING':'COILED',s.price.toFixed(2),s.dwaRank,s.pfTrend,s.sqMomDir,
     quad(s.rrgRatio,s.rrgMomentum),'','',
     s.rsi7!=null?s.rsi7.toFixed(1):'',s.rsi20!=null?s.rsi20.toFixed(1):'',s.sector]);
+  // Fresh RS>=4 crosses — the best-backtesting signal (scripts/backtest.js). Signal notes bars since cross.
+  const crossStocks=allStocks.filter(s=>s.rs4Cross!=null&&s.rs4Cross<=RS4_CROSS_FRESH)
+    .sort((a,b)=>a.rs4Cross-b.rs4Cross||b.dwaRank-a.dwaRank);
+  const crossRows=crossStocks.map(s=>[snap,'STOCK',s.ticker,s.name,
+    `RS4_CROSS(${s.rs4Cross===0?'today':s.rs4Cross+'d ago'})`,s.price.toFixed(2),s.dwaRank,s.pfTrend,s.sqMomDir,
+    quad(s.rrgRatio,s.rrgMomentum),'','',
+    s.rsi7!=null?s.rsi7.toFixed(1):'',s.rsi20!=null?s.rsi20.toFixed(1):'',s.sector]);
   const secOrder={'Leading':0,'Improving':1};
   const sigSectors=Object.entries(sectorRS).filter(([,d])=>d.quad==='Leading'||d.quad==='Improving')
     .sort((a,b)=>secOrder[a[1].quad]-secOrder[b[1].quad]);
@@ -973,8 +998,8 @@ function exportSignals(){
     d.quad==='Leading'?'LEADING':'IMPROVING','','','','',d.quad,
     d.weeksInQuad!=null?(d.quadCapped?d.weeksInQuad+'+':d.weeksInQuad):'',
     d.perfSinceQuad!=null?d.perfSinceQuad.toFixed(1):'','','','']);
-  if(!stockRows.length&&!sectorRows.length){ alert('No firing/coiled stocks or leading/improving sectors right now.'); return; }
-  csvDownload(`rs-signals_${snap}.csv`, [cols,...stockRows,...sectorRows]);
+  if(!stockRows.length&&!crossRows.length&&!sectorRows.length){ alert('No firing/coiled stocks, RS≥4 crosses, or leading/improving sectors right now.'); return; }
+  csvDownload(`rs-signals_${snap}.csv`, [cols,...stockRows,...crossRows,...sectorRows]);
 }
 function renderTable(data){
   const tb=document.getElementById('tableBody');
@@ -999,7 +1024,7 @@ function renderTable(data){
       <td class="td-ticker">${s.ticker}${tags}</td>
       <td style="font-family:'Space Mono',monospace;font-size:11px">$${s.price.toFixed(2)}</td>
       <td class="td-name">${s.name}</td>
-      <td><div class="rbadge" style="color:${rc};border:1.5px solid ${rc}">${s.dwaRank}</div></td>
+      <td><div class="rbadge" style="color:${rc};border:1.5px solid ${rc}">${s.dwaRank}</div>${s.rs4Cross!=null&&s.rs4Cross<=RS4_CROSS_FRESH?`<span class="tag-cross" title="Fresh RS≥4 cross (${s.rs4Cross===0?'today':s.rs4Cross+' bar(s) ago'}) — the signal that backtested best">✚${s.rs4Cross===0?'NEW':s.rs4Cross+'d'}</span>`:''}</td>
       <td>${s.pfTrend==='up'?'<span class="tup">▲ UP</span>':s.pfTrend==='down'?'<span class="tdn">▼ DN</span>':'<span style="color:var(--muted)">—</span>'}</td>
       <td><span class="pfsig ${s.pfTrend==='up'?'pfbuy':'pfsell'}">${s.pfSignal}</span></td>
       <td><div class="sq-cell"><div class="sq-dot-cell ${sdcls}"></div><span class="sqlbl" style="color:${slcol}">${SL[s.sqState]||'—'}</span></div></td>
