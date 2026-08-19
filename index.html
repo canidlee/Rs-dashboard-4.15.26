@@ -270,6 +270,24 @@
     </div>
     <canvas id="rrgCanvas" width="700" height="270"></canvas>
   </div>
+  <div class="rrg-box">
+    <div class="rrg-header">
+      <div class="rrg-title">Sector Rotation Table</div>
+      <div style="font-size:11px;color:var(--muted)">quadrant now vs ~1 month ago · time in quadrant · sector ETF return since it entered</div>
+    </div>
+    <div style="overflow-x:auto">
+      <table>
+        <thead><tr>
+          <th>Sector</th>
+          <th>Quadrant Now</th>
+          <th>~1 Month Ago</th>
+          <th>Weeks in Quad</th>
+          <th>Return Since Entering</th>
+        </tr></thead>
+        <tbody id="sectorQuadBody"></tbody>
+      </table>
+    </div>
+  </div>
   <div>
     <div class="controls-row">
       <input class="search-box" id="searchBox" placeholder="Search ticker or name..." oninput="applyFilters()">
@@ -777,20 +795,37 @@ async function loadAll(){
       }
     }
     const srrg=calcJdKRRG(secIdx,spyCloses);
-    const WEEK=5, tail=[];
-    for(let w=4;w>=0;w--){
+    // Weekly RRG history: HISTN weeks back for stats (last-month quad, weeks-in-quad,
+    // return-since-entering); only the last DRAWN weeks are rendered as the chart tail.
+    const WEEK=5, HISTN=26, DRAWN=8;
+    const snaps=[];
+    for(let w=HISTN;w>=0;w--){
       const sc=secIdx.slice(0,secIdx.length-w*WEEK||undefined);
       const ub=spyCloses.slice(0,spyCloses.length-w*WEEK||undefined);
-      if(sc.length<52||ub.length<52){tail.push(null);continue;}
-      tail.push(calcJdKRRG(sc,ub));
+      snaps.push((sc.length<52||ub.length<52)?null:calcJdKRRG(sc,ub));
     }
-    sectorRS[sec]={rs:ar,ratio:srrg.ratio,momentum:srrg.momentum,quad:quad(srrg.ratio,srrg.momentum),tail};
+    const quadOf=s=>s?quad(s.ratio,s.momentum):null;
+    const quadHist=snaps.map(quadOf);              // index HISTN = now
+    const curQuad=quadHist[quadHist.length-1]||quad(srrg.ratio,srrg.momentum);
+    let weeksInQuad=0;                              // consecutive weeks in current quadrant
+    for(let i=quadHist.length-1;i>=0;i--){ if(quadHist[i]===curQuad)weeksInQuad++; else break; }
+    const monthIdx=quadHist.length-1-4;            // ~4 weeks ago
+    const quadPrevMonth=monthIdx>=0?quadHist[monthIdx]:null;
+    let perfSinceQuad=null;                         // sector ETF % return since entering current quadrant
+    const barsBack=Math.min(weeksInQuad,HISTN)*WEEK;
+    if(barsBack>0&&secIdx.length>barsBack){
+      const nowP=secIdx[secIdx.length-1], thenP=secIdx[secIdx.length-1-barsBack];
+      if(thenP) perfSinceQuad=(nowP/thenP-1)*100;
+    }
+    const tail=snaps.slice(-1-DRAWN,-1);            // last DRAWN history points (current added by drawRRG)
+    sectorRS[sec]={rs:ar,ratio:srrg.ratio,momentum:srrg.momentum,quad:curQuad,tail,
+      weeksInQuad,quadPrevMonth,perfSinceQuad,quadCapped:weeksInQuad>HISTN};
   }
   // (Removed cross-sectional re-normalization: sectors are now read on the standard JdK
   // "vs market" scale produced by calcJdKRRG above, not re-centered against each other.
   // drawRRG() auto-zooms the axes to the data range, so the plot still fills the canvas.)
   setStatus("Rendering..."); await tick();
-  updateStats(); renderSectorBars(); drawRRG(); applyFilters();
+  updateStats(); renderSectorBars(); drawRRG(); renderSectorQuadTable(); applyFilters();
   document.getElementById('lastUpdated').textContent='Updated '+new Date().toLocaleTimeString()
     +(staticFetchedAt?` (precomputed data as of ${new Date(staticFetchedAt).toLocaleString()})`:'');
   document.getElementById('cnt-r1000').textContent=R1000.length;
@@ -832,12 +867,16 @@ function drawRRG(){
       const pts=d.tail.filter(t=>t).map(t=>({x:tx(t.ratio),y:ty(t.momentum)}));
       pts.push({x,y}); // add current position
       if(pts.length>1){
+        // hollow ring marks the OLDEST point — where the trail starts
+        ctx.beginPath();ctx.arc(pts[0].x,pts[0].y,3.5,0,Math.PI*2);
+        ctx.strokeStyle=col+'99';ctx.lineWidth=1;ctx.stroke();
         for(let i=1;i<pts.length;i++){
-          const alpha=Math.round((i/pts.length)*160).toString(16).padStart(2,'0');
+          const a=Math.min(Math.round(90+(i/pts.length)*165),255); // brighter floor so the origin stays visible
+          const alpha=a.toString(16).padStart(2,'0');
           ctx.strokeStyle=col+alpha;
-          ctx.lineWidth=1.5;
+          ctx.lineWidth=2.2;
           ctx.beginPath();ctx.moveTo(pts[i-1].x,pts[i-1].y);ctx.lineTo(pts[i].x,pts[i].y);ctx.stroke();
-          ctx.beginPath();ctx.arc(pts[i-1].x,pts[i-1].y,2.5,0,Math.PI*2);
+          ctx.beginPath();ctx.arc(pts[i-1].x,pts[i-1].y,2.2,0,Math.PI*2);
           ctx.fillStyle=col+alpha;ctx.fill();
         }
       }
@@ -978,6 +1017,29 @@ function renderSectorBars(){
       <div class="sbar-track"><div class="sbar-fill" style="width:${w}%;background:${col}"></div></div>
       <div class="sbar-quad" style="color:${col};width:20px;font-size:9px">${{Leading:"LD",Weakening:"WK",Lagging:"LG",Improving:"IM"}[d.quad]||"?"}</div>
     </div>`;
+  }).join('');
+}
+function renderSectorQuadTable(){
+  const tb=document.getElementById('sectorQuadBody');
+  if(!tb)return;
+  const qc={'Leading':'var(--green)','Weakening':'var(--accent2)','Lagging':'var(--red)','Improving':'#748ffc'};
+  const order={'Leading':0,'Improving':1,'Weakening':2,'Lagging':3};
+  const entries=Object.entries(sectorRS).sort((a,b)=>
+    (order[a[1].quad]??4)-(order[b[1].quad]??4) || (b[1].ratio-a[1].ratio));
+  const badge=(q,muted)=>`<span class="rrg-quad" style="border-color:${q?(qc[q]||'#888'):'var(--border)'};color:${q?(qc[q]||'#888'):'var(--muted)'}">${q||'—'}</span>`;
+  tb.innerHTML=entries.map(([sec,d])=>{
+    const cur=d.quad, prev=d.quadPrevMonth, moved=prev&&prev!==cur;
+    const wk=d.weeksInQuad!=null?(d.quadCapped?d.weeksInQuad+'w+':d.weeksInQuad+'w'):'—';
+    const p=d.perfSinceQuad;
+    const pCol=p==null?'var(--muted)':p>=0?'var(--green)':'var(--red)';
+    const pStr=p==null?'—':(p>=0?'+':'')+p.toFixed(1)+'%';
+    return `<tr>
+      <td style="font-family:'Space Mono',monospace;font-size:12px;font-weight:700">${sec}</td>
+      <td>${badge(cur)}</td>
+      <td>${badge(prev)}${moved?' <span style="color:var(--muted);font-size:9px">↳ moved</span>':''}</td>
+      <td style="font-family:'Space Mono',monospace;font-size:12px">${wk}</td>
+      <td style="font-family:'Space Mono',monospace;font-size:12px;font-weight:700;color:${pCol}">${pStr}</td>
+    </tr>`;
   }).join('');
 }
 function showDetail(ticker){
