@@ -176,9 +176,10 @@ function record(sig, fwd) {
 }
 
 const universe = Object.keys(data).filter(t => !NON_STOCKS.has(t));
+const crossFloatEvents = []; // {turn, fwd} for each RS4_CROSS with a known float
 let evaluated = 0;
 for (const t of universe) {
-  const { closes, highs, lows, volumes } = data[t];
+  const { closes, highs, lows, volumes, float: flt } = data[t];
   const L = closes.length;
   if (L < MINPREFIX + MINH + 2) continue;
   const sector = getSector(t);
@@ -212,7 +213,10 @@ for (const t of universe) {
       if (sq === 'Leading' || sq === 'Improving') record('RS4_secLDIM', fwd);
       else if (sq === 'Weakening' || sq === 'Lagging') record('RS4_secWKLG', fwd);
     }
-    if (crossed) { record('RS4_CROSS', fwd); if (fired) record('FIRE&RS4_CROSS', fwd); }
+    if (crossed) {
+      record('RS4_CROSS', fwd); if (fired) record('FIRE&RS4_CROSS', fwd);
+      if (flt && volumes && idx >= 14) { let v = 0; for (let i = idx - 14; i <= idx; i++) v += volumes[i]; crossFloatEvents.push({ turn: v / flt, fwd }); }
+    }
     // RSI catalysts: RSI7 > 50 (state) and RSI20 crossing above its 20-period MA (event)
     const r7 = calcRSI(cS, 7); const rsi7 = r7.length ? r7[r7.length - 1] : null;
     const r20 = calcRSI(cS, 20);
@@ -271,4 +275,21 @@ for (const h of HORIZONS) {
   }
   console.log('');
 }
-console.log('ExcessVsSPY and Win%vsSPY are the edge over SPY. Compare RS4_secLDIM vs RS4_secWKLG to judge the sector RRG.\n');
+// --- Does % of float confirm the RS4 cross? Split cross events by recent float turnover. ---
+if (crossFloatEvents.length >= 20) {
+  const sorted = [...crossFloatEvents].sort((a, b) => a.turn - b.turn);
+  const med = sorted[Math.floor(sorted.length / 2)].turn;
+  const lo = crossFloatEvents.filter(e => e.turn <= med);
+  const hi = crossFloatEvents.filter(e => e.turn > med);
+  console.log(`--- RS4_CROSS split by recent float turnover (15-day volume / float); median = ${(med * 100).toFixed(2)}% of float ---`);
+  console.log(pad('Group', 22) + padL('N', 6) + HORIZONS.map(h => padL('exc+' + h, 9)).join('') + padL('win+40', 9));
+  for (const [name, grp] of [['LOW turnover cross', lo], ['HIGH turnover cross', hi]]) {
+    const cells = HORIZONS.map(h => { const es = grp.map(e => e.fwd[h]).filter(Boolean); return padL(es.length ? pct(es.reduce((a, c) => a + c.exc, 0) / es.length) : '-', 9); });
+    const e40 = grp.map(e => e.fwd[40]).filter(Boolean);
+    console.log(pad(name, 22) + padL(grp.length, 6) + cells.join('') + padL(e40.length ? (e40.filter(f => f.exc > 0).length / e40.length * 100).toFixed(0) + '%' : '-', 9));
+  }
+  console.log('If HIGH-turnover crosses beat LOW, % of float adds confirmation. NOTE: R1000 megacaps have huge\nfloats, so turnover is tiny here — this signal is far more meaningful on smaller-float growth names.\n');
+} else {
+  console.log('(Float turnover analysis skipped — no float data in prices.json yet. Regenerate with the updated fetch_prices.py.)\n');
+}
+console.log('ExcessVsSPY and Win%vsSPY are the edge over SPY.\n');

@@ -13,6 +13,8 @@ import json
 import time
 import urllib.request
 import urllib.error
+import urllib.parse
+import http.cookiejar
 from datetime import datetime, timezone
 
 R1000 = [
@@ -90,12 +92,53 @@ def fetch_one(ticker, retries=2, timeout=10):
     return None, last_err
 
 
+_UA = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+_OPENER = None
+_CRUMB = None
+
+
+def init_yahoo_session():
+    """Prime cookies + fetch a crumb so we can call the (auth-gated) quoteSummary
+    endpoint for share float. Best-effort: if it fails, float is simply skipped."""
+    global _OPENER, _CRUMB
+    cj = http.cookiejar.CookieJar()
+    _OPENER = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cj))
+    try:
+        _OPENER.open(urllib.request.Request("https://fc.yahoo.com", headers=_UA), timeout=15)
+    except Exception:
+        pass
+    try:
+        req = urllib.request.Request("https://query2.finance.yahoo.com/v1/test/getcrumb", headers=_UA)
+        _CRUMB = _OPENER.open(req, timeout=15).read().decode().strip()
+    except Exception as e:
+        _CRUMB = None
+        print(f"Could not get Yahoo crumb ({e}); float will be skipped.")
+
+
+def fetch_float(ticker):
+    """Return share float (falls back to shares outstanding), or None."""
+    if not _CRUMB or not _OPENER:
+        return None
+    url = (
+        f"https://query2.finance.yahoo.com/v10/finance/quoteSummary/{ticker}"
+        f"?modules=defaultKeyStatistics&crumb={urllib.parse.quote(_CRUMB)}"
+    )
+    try:
+        raw = _OPENER.open(urllib.request.Request(url, headers=_UA), timeout=15).read().decode()
+        ks = json.loads(raw)["quoteSummary"]["result"][0]["defaultKeyStatistics"]
+        return ks.get("floatShares", {}).get("raw") or ks.get("sharesOutstanding", {}).get("raw")
+    except Exception:
+        return None
+
+
 def main():
+    init_yahoo_session()
     out = {}
     failures = {}
     for i, ticker in enumerate(TICKERS):
         data, err = fetch_one(ticker)
         if data:
+            data["float"] = fetch_float(ticker)  # share float for %-of-float / turnover signals
             out[ticker] = data
         else:
             failures[ticker] = err
