@@ -336,7 +336,8 @@ const SECTORS = {
   "Energy":     ["XOM","CVX","COP","EOG","SLB","MPC","PSX","VLO","OXY","PXD"],
   "Materials":  ["LIN","APD","ECL","SHW","NEM","FCX","NUE","CF","MOS","ALB"],
   "Staples":    ["PG","KO","PEP","WMT","COST","TGT","PM","MO","CL","KMB"],
-  "Util/RE":    ["NEE","DUK","SO","D","AEP","AMT","PLD","SPG","O","WELL"]
+  "Utilities":  ["NEE","DUK","SO","D","AEP"],
+  "Real Estate":["AMT","PLD","SPG","O","WELL"]
 };
 function getSector(t){ for(const[s,ts]of Object.entries(SECTORS))if(ts.includes(t))return s; return "Other"; }
 let allStocks=[], sectorRS={}, spyCloses=null, benchmarkCloses=null, currentFiltered=[];
@@ -347,8 +348,7 @@ let addedTickers=JSON.parse(localStorage.getItem("rsc_watchlist")||"[]");
 let ibdList=JSON.parse(localStorage.getItem("rsc_ibd")||"[]");
 const SECTOR_ETFS = ["XLK","XLF","XLV","XLE","XLI","XLY","XLP","XLU","XLRE","XLB","XLC"];
 // Maps each dashboard sector to its real SPDR sector ETF for the RRG (StockCharts methodology).
-// Util/RE has no single SPDR, so it uses the normalized average of XLU + XLRE.
-const SECTOR_ETF_MAP = {"Tech":"XLK","Financials":"XLF","Healthcare":"XLV","Cons.Disc":"XLY","Industrials":"XLI","Energy":"XLE","Materials":"XLB","Staples":"XLP","Util/RE":["XLU","XLRE"]};
+const SECTOR_ETF_MAP = {"Tech":"XLK","Financials":"XLF","Healthcare":"XLV","Cons.Disc":"XLY","Industrials":"XLI","Energy":"XLE","Materials":"XLB","Staples":"XLP","Utilities":"XLU","Real Estate":"XLRE"};
 let activeUniverses = new Set(JSON.parse(localStorage.getItem("rsc_universes")||'["r1000"]'));
 function saveState(){
   localStorage.setItem("rsc_watchlist",JSON.stringify(addedTickers));
@@ -759,7 +759,7 @@ async function loadAll(){
     const m=stocks.filter(s=>ts.includes(s.ticker));if(!m.length)continue;
     const ar=m.reduce((a,b)=>a+b.rs,0)/m.length;
     // Sector RRG now uses the real SPDR sector ETF(s) vs SPY (StockCharts methodology),
-    // not a homemade member basket. Util/RE = normalized average of XLU + XLRE.
+    // not a homemade member basket (each sector maps to its SPDR ETF via SECTOR_ETF_MAP).
     const mapped=SECTOR_ETF_MAP[sec];
     const series=(Array.isArray(mapped)?mapped:[mapped]).map(sym=>etfCloses[sym]).filter(c=>c&&c.length);
     let secIdx=null;
