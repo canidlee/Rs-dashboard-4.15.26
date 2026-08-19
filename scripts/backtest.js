@@ -166,7 +166,7 @@ function sectorQuadAt(sector, k) {
   return (sqCache[key] = r ? quad(r.ratio, r.momentum) : null);
 }
 
-const SIGS = ['ALL', 'TTM_FIRE', 'RS>=4', 'RS4_CROSS', 'RSI7>50', 'RSI20xMA', 'CROSS&RSI7>50', 'CROSS&RSI20xMA', 'RS4_secLDIM', 'RS4_secWKLG'];
+const SIGS = ['ALL', 'RS4_CROSS', 'RVOL2X', 'AVWAP_RECLAIM', 'ANTS', 'CROSS&RVOL2X', 'CROSS&AVWAP_RECLAIM', 'CROSS&ANTS'];
 const stats = {};
 for (const s of SIGS) { stats[s] = { n: 0 }; for (const h of HORIZONS) stats[s]['h' + h] = { sumRaw: 0, sumExc: 0, win: 0, cnt: 0 }; }
 function record(sig, fwd) {
@@ -178,7 +178,7 @@ function record(sig, fwd) {
 const universe = Object.keys(data).filter(t => !NON_STOCKS.has(t));
 let evaluated = 0;
 for (const t of universe) {
-  const { closes, highs, lows } = data[t];
+  const { closes, highs, lows, volumes } = data[t];
   const L = closes.length;
   if (L < MINPREFIX + MINH + 2) continue;
   const sector = getSector(t);
@@ -228,6 +228,31 @@ for (const t of universe) {
     if (rsi20xma) record('RSI20xMA', fwd);
     if (crossed && rsi7gt50) record('CROSS&RSI7>50', fwd);
     if (crossed && rsi20xma) record('CROSS&RSI20xMA', fwd);
+    // --- Volume signals ---
+    if (volumes && volumes.length === L) {
+      // Relative volume: today vs 50-day average
+      let rvol2x = false;
+      if (idx >= 50) { let s = 0; for (let i = idx - 49; i <= idx; i++) s += volumes[i]; const avg = s / 50; rvol2x = avg > 0 && volumes[idx] >= 2 * avg; }
+      // AVWAP reclaim: anchor at the 52-week-high bar; fresh close-cross above that anchored VWAP
+      let reclaim = false;
+      const start = Math.max(0, idx - 251);
+      let aIdx = start, aMax = highs[start];
+      for (let i = start; i <= idx; i++) if (highs[i] > aMax) { aMax = highs[i]; aIdx = i; }
+      if (aIdx <= idx - 10) { // anchor must be a prior high, not today, for a meaningful reclaim
+        const avwap = j => { let pv = 0, vv = 0; for (let i = aIdx; i <= j; i++) { pv += ((highs[i] + lows[i] + closes[i]) / 3) * volumes[i]; vv += volumes[i]; } return vv ? pv / vv : null; };
+        const now = avwap(idx), prev = avwap(idx - 1);
+        reclaim = now != null && prev != null && closes[idx] > now && closes[idx - 1] <= prev;
+      }
+      // ANTs-style sustained accumulation: last 15 bars up, with up-volume dominating down-volume
+      let ants = false; const W = 15;
+      if (idx >= W) { let up = 0, dn = 0; for (let i = idx - W + 1; i <= idx; i++) (closes[i] > closes[i - 1] ? up += volumes[i] : dn += volumes[i]); ants = closes[idx] > closes[idx - W] && dn > 0 && up / dn >= 1.25; }
+      if (rvol2x) record('RVOL2X', fwd);
+      if (reclaim) record('AVWAP_RECLAIM', fwd);
+      if (ants) record('ANTS', fwd);
+      if (crossed && rvol2x) record('CROSS&RVOL2X', fwd);
+      if (crossed && reclaim) record('CROSS&AVWAP_RECLAIM', fwd);
+      if (crossed && ants) record('CROSS&ANTS', fwd);
+    }
     prevScore = score;
   }
 }

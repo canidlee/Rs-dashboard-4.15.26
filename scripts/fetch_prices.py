@@ -59,13 +59,15 @@ def fetch_one(ticker, retries=2, timeout=10):
             closes_raw = quote.get("close") or []
             highs_raw = quote.get("high") or []
             lows_raw = quote.get("low") or []
+            vols_raw = quote.get("volume") or []
             ts_raw = res.get("timestamp") or []
-            closes, highs, lows, dates = [], [], [], []
-            for t, c, h, l in zip(ts_raw, closes_raw, highs_raw, lows_raw):
+            closes, highs, lows, dates, vols = [], [], [], [], []
+            for t, c, h, l, v in zip(ts_raw, closes_raw, highs_raw, lows_raw, vols_raw):
                 if c is not None and h is not None and l is not None:
                     closes.append(c)
                     highs.append(h)
                     lows.append(l)
+                    vols.append(v if v is not None else 0)
                     dates.append(
                         datetime.fromtimestamp(t, timezone.utc).strftime("%Y-%m-%d")
                     )
@@ -74,6 +76,7 @@ def fetch_one(ticker, retries=2, timeout=10):
                 "closes": closes,
                 "highs": highs,
                 "lows": lows,
+                "volumes": vols,  # daily volume per bar, for AVWAP / relative-volume / accumulation signals
                 "dates": dates,  # ISO date per bar, for signal backtesting/scoring
                 "name": meta.get("shortName", ticker),
                 "price": meta.get("regularMarketPrice", 0),
