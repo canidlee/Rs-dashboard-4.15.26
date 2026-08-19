@@ -299,6 +299,7 @@
       <span class="pill"        data-s="ticker"  onclick="setSort('ticker')">Ticker</span>
       <span class="pill"        data-s="pf"      onclick="setSort('pf')">P&F</span>
       <span class="pill" onclick="exportCSV()" style="margin-left:auto">⬇ EXPORT CSV</span>
+      <span class="pill" onclick="exportSignals()" title="Firing/coiled stocks + leading/improving sectors, date-stamped for tracking">⬇ EXPORT SIGNALS</span>
     </div>
     <div style="overflow-x:auto">
       <table>
@@ -942,6 +943,38 @@ function exportCSV(){
   a.href=url; a.download=`rs-dashboard_${stamp}.csv`;
   document.body.appendChild(a); a.click(); document.body.removeChild(a);
   URL.revokeObjectURL(url);
+}
+function csvDownload(name, matrix){
+  const csv=matrix.map(r=>r.map(csvField).join(',')).join('\r\n');
+  const blob=new Blob([csv],{type:'text/csv;charset=utf-8;'});
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement('a');
+  a.href=url; a.download=name;
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+// Date-stamped snapshot of active signals for out-of-sample accuracy tracking:
+// firing/coiled stocks + leading/improving sectors. Append these daily and later
+// join each row's entry Price/Snapshot against forward prices to score the signals.
+function exportSignals(){
+  const snapTs=(allStocks.find(s=>s.fetchedAt)||{}).fetchedAt;
+  const snap=snapTs?new Date(snapTs).toISOString().slice(0,10):new Date().toISOString().slice(0,10);
+  const cols=['Snapshot','Type','Symbol','Name','Signal','Price','RS_Score','PF_Trend','TTM_Mom','Quadrant','Weeks_In_Quad','Ret_Since_Enter_%','RSI7','RSI20','Sector'];
+  const sqStocks=allStocks.filter(s=>s.sqState==='fire'||s.sqState==='on')
+    .sort((a,b)=>(a.sqState==='fire'?0:1)-(b.sqState==='fire'?0:1)||b.dwaRank-a.dwaRank);
+  const stockRows=sqStocks.map(s=>[snap,'STOCK',s.ticker,s.name,
+    s.sqState==='fire'?'FIRING':'COILED',s.price.toFixed(2),s.dwaRank,s.pfTrend,s.sqMomDir,
+    quad(s.rrgRatio,s.rrgMomentum),'','',
+    s.rsi7!=null?s.rsi7.toFixed(1):'',s.rsi20!=null?s.rsi20.toFixed(1):'',s.sector]);
+  const secOrder={'Leading':0,'Improving':1};
+  const sigSectors=Object.entries(sectorRS).filter(([,d])=>d.quad==='Leading'||d.quad==='Improving')
+    .sort((a,b)=>secOrder[a[1].quad]-secOrder[b[1].quad]);
+  const sectorRows=sigSectors.map(([sec,d])=>[snap,'SECTOR',sec,'',
+    d.quad==='Leading'?'LEADING':'IMPROVING','','','','',d.quad,
+    d.weeksInQuad!=null?(d.quadCapped?d.weeksInQuad+'+':d.weeksInQuad):'',
+    d.perfSinceQuad!=null?d.perfSinceQuad.toFixed(1):'','','','']);
+  if(!stockRows.length&&!sectorRows.length){ alert('No firing/coiled stocks or leading/improving sectors right now.'); return; }
+  csvDownload(`rs-signals_${snap}.csv`, [cols,...stockRows,...sectorRows]);
 }
 function renderTable(data){
   const tb=document.getElementById('tableBody');
