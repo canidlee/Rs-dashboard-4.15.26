@@ -1149,6 +1149,9 @@ function showDetail(ticker){
     <div class="det-name">${s.name}</div>
     <div class="det-grid">
       <div class="det-item"><div class="det-lbl">RS Score (5-Factor)</div><div class="det-val" style="color:${rc}">${s.dwaRank}/5</div></div>
+      <div class="det-item"><div class="det-lbl">Float Turnover (15d ÷ float)</div><div class="det-val" style="color:${s.floatTurn!=null?(s.floatTurn>=FLOAT_TO_HIGH?'var(--green)':'var(--muted)'):'var(--muted)'};font-size:13px">${s.floatTurn!=null?(s.floatTurn*100).toFixed(1)+'%':'—'}${s.floatTurn!=null&&s.floatTurn>=FLOAT_TO_HIGH?' <span style="font-size:9px;color:var(--muted)">high</span>':''}</div></div>
+      <div class="det-item"><div class="det-lbl">Accumulation (ANTs)</div><div class="det-val" style="color:${s.ants?'var(--accent2)':'var(--muted)'};font-size:13px">${s.ants?'▲ Yes':'—'}${s.antsRatio?` <span style="font-size:10px;color:var(--muted)">${s.antsRatio.toFixed(1)}× up/dn vol</span>`:''}</div></div>
+      <div class="det-item"><div class="det-lbl">Share Float</div><div class="det-val" style="font-size:13px">${s.floatShares?(s.floatShares/1e6>=1000?(s.floatShares/1e9).toFixed(2)+'B':(s.floatShares/1e6).toFixed(0)+'M'):'—'}</div></div>
       <div class="det-item"><div class="det-lbl">Rel P&F Trend (vs bmk)</div><div class="det-val" style="color:${s.pfTrend==='up'?'var(--green)':'var(--red)'}">${s.pfTrend==='up'?'▲ UP':'▼ DOWN'}</div></div>
       <div class="det-item"><div class="det-lbl">TTM Squeeze (vol)</div><div class="det-val" style="color:${sqCol};font-size:12px">${sqLbl}</div></div>
       <div class="det-item"><div class="det-lbl">TTM Mom (vol)</div><div class="det-val" style="color:${s.sqMomDir==='up'?'var(--green)':'var(--red)'};font-size:12px">${s.sqMomDir==='up'?'▲ Rising':s.sqMomDir==='down'?'▼ Falling':'Flat'}</div></div>
