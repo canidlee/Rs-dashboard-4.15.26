@@ -346,6 +346,9 @@ let activeRanks=new Set([3,4,5]), activeSq=new Set();
 let addedTickers=JSON.parse(localStorage.getItem("rsc_watchlist")||"[]");
 let ibdList=JSON.parse(localStorage.getItem("rsc_ibd")||"[]");
 const SECTOR_ETFS = ["XLK","XLF","XLV","XLE","XLI","XLY","XLP","XLU","XLRE","XLB","XLC"];
+// Maps each dashboard sector to its real SPDR sector ETF for the RRG (StockCharts methodology).
+// Util/RE has no single SPDR, so it uses the normalized average of XLU + XLRE.
+const SECTOR_ETF_MAP = {"Tech":"XLK","Financials":"XLF","Healthcare":"XLV","Cons.Disc":"XLY","Industrials":"XLI","Energy":"XLE","Materials":"XLB","Staples":"XLP","Util/RE":["XLU","XLRE"]};
 let activeUniverses = new Set(JSON.parse(localStorage.getItem("rsc_universes")||'["r1000"]'));
 function saveState(){
   localStorage.setItem("rsc_watchlist",JSON.stringify(addedTickers));
@@ -653,6 +656,15 @@ async function loadAll(){
     benchmarkCloses = null; // universe mode — built after fetch
   }
 
+  // Sector RRG benchmarks: real SPDR sector ETFs (vs SPY), replacing the old homemade
+  // equal-weight member baskets. All SPDRs are in the precomputed snapshot; live-fetch is fallback.
+  setStatus('Loading sector ETFs for RRG...');
+  const etfCloses={};
+  for(const sym of ['XLK','XLF','XLV','XLY','XLI','XLE','XLB','XLP','XLU','XLRE']){
+    const e=staticTickers[sym]||await fetchStockCached(sym);
+    if(e&&e.closes&&e.closes.length) etfCloses[sym]=e.closes;
+  }
+
   const liveTickers = tickers.filter(t=>!staticTickers[t]);
   const staleCount=liveTickers.filter(t=>!isCacheFresh(t)).length;
   setStatus(liveTickers.length
@@ -746,10 +758,23 @@ async function loadAll(){
   for(const[sec,ts]of Object.entries(SECTORS)){
     const m=stocks.filter(s=>ts.includes(s.ticker));if(!m.length)continue;
     const ar=m.reduce((a,b)=>a+b.rs,0)/m.length;
-    const minLen=Math.min(...m.map(s=>s.closes.length));
-    const secIdx=[];
-    for(let i=0;i<minLen;i++){
-      secIdx.push(m.reduce((s,stk)=>s+(stk.closes[stk.closes.length-minLen+i]/stk.closes[stk.closes.length-minLen]),0)/m.length);
+    // Sector RRG now uses the real SPDR sector ETF(s) vs SPY (StockCharts methodology),
+    // not a homemade member basket. Util/RE = normalized average of XLU + XLRE.
+    const mapped=SECTOR_ETF_MAP[sec];
+    const series=(Array.isArray(mapped)?mapped:[mapped]).map(sym=>etfCloses[sym]).filter(c=>c&&c.length);
+    let secIdx=null;
+    if(series.length===1) secIdx=series[0];
+    else if(series.length>1){
+      const minL=Math.min(...series.map(c=>c.length));
+      secIdx=[];
+      for(let i=0;i<minL;i++) secIdx.push(series.reduce((s,c)=>s+(c[c.length-minL+i]/c[c.length-minL]),0)/series.length);
+    }
+    if(!secIdx){ // ETF data unavailable — fall back to equal-weight member basket so the sector still plots
+      const minLen=Math.min(...m.map(s=>s.closes.length));
+      secIdx=[];
+      for(let i=0;i<minLen;i++){
+        secIdx.push(m.reduce((s,stk)=>s+(stk.closes[stk.closes.length-minLen+i]/stk.closes[stk.closes.length-minLen]),0)/m.length);
+      }
     }
     const srrg=calcJdKRRG(secIdx,spyCloses);
     const WEEK=5, tail=[];
@@ -761,22 +786,9 @@ async function loadAll(){
     }
     sectorRS[sec]={rs:ar,ratio:srrg.ratio,momentum:srrg.momentum,quad:quad(srrg.ratio,srrg.momentum),tail};
   }
-  const secVals = Object.values(sectorRS);
-  if(secVals.length > 1){
-    const rMean = secVals.reduce((a,b)=>a+b.ratio,0)/secVals.length;
-    const mMean = secVals.reduce((a,b)=>a+b.momentum,0)/secVals.length;
-    const rStd  = Math.sqrt(secVals.reduce((a,b)=>a+(b.ratio-rMean)**2,0)/secVals.length)||1;
-    const mStd  = Math.sqrt(secVals.reduce((a,b)=>a+(b.momentum-mMean)**2,0)/secVals.length)||1;
-    for(const d of secVals){
-      d.ratio    = ((d.ratio-rMean)/rStd)*10+100;
-      d.momentum = ((d.momentum-mMean)/mStd)*10+100;
-      d.quad     = quad(d.ratio,d.momentum);
-      if(d.tail) d.tail=d.tail.map(t=>t?{
-        ratio:    ((t.ratio-rMean)/rStd)*10+100,
-        momentum: ((t.momentum-mMean)/mStd)*10+100
-      }:null);
-    }
-  }
+  // (Removed cross-sectional re-normalization: sectors are now read on the standard JdK
+  // "vs market" scale produced by calcJdKRRG above, not re-centered against each other.
+  // drawRRG() auto-zooms the axes to the data range, so the plot still fills the canvas.)
   setStatus("Rendering..."); await tick();
   updateStats(); renderSectorBars(); drawRRG(); applyFilters();
   document.getElementById('lastUpdated').textContent='Updated '+new Date().toLocaleTimeString()
@@ -803,8 +815,14 @@ function drawRRG(){
   ctx.fillText('LAGGING',8,H-8);ctx.fillText('IMPROVING',8,16);
   if(!Object.keys(sectorRS).length)return;
   const vs=Object.values(sectorRS);
-  const rMin=Math.min(...vs.map(v=>v.ratio))-1,rMax=Math.max(...vs.map(v=>v.ratio))+1;
-  const mMin=Math.min(...vs.map(v=>v.momentum))-1,mMax=Math.max(...vs.map(v=>v.momentum))+1;
+  // Include tail points in the range so trails don't clip at the canvas edge.
+  const allR=[],allM=[];
+  for(const v of vs){
+    allR.push(v.ratio); allM.push(v.momentum);
+    if(v.tail) for(const t of v.tail){ if(t){ allR.push(t.ratio); allM.push(t.momentum); } }
+  }
+  const rMin=Math.min(...allR)-1,rMax=Math.max(...allR)+1;
+  const mMin=Math.min(...allM)-1,mMax=Math.max(...allM)+1;
   const tx=r=>((r-rMin)/(rMax-rMin))*(W-60)+30;
   const ty=m=>H-20-((m-mMin)/(mMax-mMin))*(H-40);
   const qc={'Leading':'#00d4aa','Weakening':'#f5a623','Lagging':'#ff4757','Improving':'#748ffc'};
