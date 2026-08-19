@@ -59,17 +59,22 @@ def fetch_one(ticker, retries=2, timeout=10):
             closes_raw = quote.get("close") or []
             highs_raw = quote.get("high") or []
             lows_raw = quote.get("low") or []
-            closes, highs, lows = [], [], []
-            for c, h, l in zip(closes_raw, highs_raw, lows_raw):
+            ts_raw = res.get("timestamp") or []
+            closes, highs, lows, dates = [], [], [], []
+            for t, c, h, l in zip(ts_raw, closes_raw, highs_raw, lows_raw):
                 if c is not None and h is not None and l is not None:
                     closes.append(c)
                     highs.append(h)
                     lows.append(l)
+                    dates.append(
+                        datetime.fromtimestamp(t, timezone.utc).strftime("%Y-%m-%d")
+                    )
             meta = res.get("meta") or {}
             return {
                 "closes": closes,
                 "highs": highs,
                 "lows": lows,
+                "dates": dates,  # ISO date per bar, for signal backtesting/scoring
                 "name": meta.get("shortName", ticker),
                 "price": meta.get("regularMarketPrice", 0),
             }, None
