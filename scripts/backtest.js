@@ -99,6 +99,20 @@ function calcJdKRRG(closes, benchCloses) {
   const rsd = Math.sqrt(sRoc.slice(-52).reduce((a, c) => a + (c - rm) ** 2, 0) / 52) || 1;
   return { ratio: rsRatio, momentum: ((sRoc[sRoc.length - 1] - rm) / rsd) * 10 + 100 };
 }
+function calcRSI(closes, period) {
+  if (!closes || closes.length < period + 1) return [];
+  const rsi = []; let g = 0, l = 0;
+  for (let i = 1; i <= period; i++) { const d = closes[i] - closes[i - 1]; if (d >= 0) g += d; else l -= d; }
+  let ag = g / period, al = l / period;
+  rsi.push(al === 0 ? 100 : 100 - (100 / (1 + ag / al)));
+  for (let i = period + 1; i < closes.length; i++) {
+    const d = closes[i] - closes[i - 1];
+    ag = (ag * (period - 1) + (d > 0 ? d : 0)) / period;
+    al = (al * (period - 1) + (d < 0 ? -d : 0)) / period;
+    rsi.push(al === 0 ? 100 : 100 - (100 / (1 + ag / al)));
+  }
+  return rsi;
+}
 /* ------------------------- end copied math ---------------------------- */
 
 const SECTORS = {
@@ -152,11 +166,12 @@ function sectorQuadAt(sector, k) {
   return (sqCache[key] = r ? quad(r.ratio, r.momentum) : null);
 }
 
-const SIGS = ['ALL', 'TTM_FIRE', 'RS>=3', 'RS>=4', 'FIRE&RS>=4', 'RS4_CROSS', 'FIRE&RS4_CROSS', 'RS4_secLDIM', 'RS4_secWKLG'];
+const SIGS = ['ALL', 'TTM_FIRE', 'RS>=4', 'RS4_CROSS', 'RSI7>50', 'RSI20xMA', 'CROSS&RSI7>50', 'CROSS&RSI20xMA', 'RS4_secLDIM', 'RS4_secWKLG'];
 const stats = {};
 for (const s of SIGS) { stats[s] = { n: 0 }; for (const h of HORIZONS) stats[s]['h' + h] = { sumRaw: 0, sumExc: 0, win: 0, cnt: 0 }; }
 function record(sig, fwd) {
-  const st = stats[sig]; st.n++;
+  const st = stats[sig]; if (!st) return;
+  st.n++;
   for (const h of HORIZONS) { const f = fwd[h]; if (!f) continue; const b = st['h' + h]; b.sumRaw += f.raw; b.sumExc += f.exc; if (f.exc > 0) b.win++; b.cnt++; }
 }
 
@@ -198,6 +213,21 @@ for (const t of universe) {
       else if (sq === 'Weakening' || sq === 'Lagging') record('RS4_secWKLG', fwd);
     }
     if (crossed) { record('RS4_CROSS', fwd); if (fired) record('FIRE&RS4_CROSS', fwd); }
+    // RSI catalysts: RSI7 > 50 (state) and RSI20 crossing above its 20-period MA (event)
+    const r7 = calcRSI(cS, 7); const rsi7 = r7.length ? r7[r7.length - 1] : null;
+    const r20 = calcRSI(cS, 20);
+    const rsi7gt50 = rsi7 !== null && rsi7 > 50;
+    let rsi20xma = false;
+    if (r20.length >= 21) {
+      const now = r20[r20.length - 1], prev = r20[r20.length - 2];
+      const maNow = r20.slice(-20).reduce((a, b) => a + b, 0) / 20;
+      const maPrev = r20.slice(-21, -1).reduce((a, b) => a + b, 0) / 20;
+      rsi20xma = now > maNow && prev <= maPrev;
+    }
+    if (rsi7gt50) record('RSI7>50', fwd);
+    if (rsi20xma) record('RSI20xMA', fwd);
+    if (crossed && rsi7gt50) record('CROSS&RSI7>50', fwd);
+    if (crossed && rsi20xma) record('CROSS&RSI20xMA', fwd);
     prevScore = score;
   }
 }
