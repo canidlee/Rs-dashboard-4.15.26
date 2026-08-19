@@ -133,6 +133,7 @@
   .tag-ibd { font-size: 9px; font-family: 'Space Mono', monospace; padding: 1px 4px; border: 1px solid var(--accent2); color: var(--accent2); margin-left: 3px; }
   .tag-add { font-size: 9px; font-family: 'Space Mono', monospace; padding: 1px 4px; border: 1px solid #748ffc; color: #748ffc; margin-left: 3px; }
   .tag-cross { font-size: 9px; font-family: 'Space Mono', monospace; font-weight: 700; padding: 1px 4px; border: 1px solid var(--green); color: var(--green); margin-left: 4px; background: rgba(0,212,170,0.12); white-space: nowrap; }
+  .tag-acc { font-size: 9px; font-family: 'Space Mono', monospace; font-weight: 700; padding: 1px 4px; border: 1px solid var(--accent2); color: var(--accent2); margin-left: 4px; background: rgba(245,166,35,0.12); white-space: nowrap; }
   .loading-overlay { position: fixed; inset: 0; background: rgba(10,12,15,0.93); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px; z-index: 999; }
   .loading-overlay.hidden { display: none; }
   .spinner { width: 36px; height: 36px; border: 2px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin 0.7s linear infinite; }
@@ -257,6 +258,7 @@
     <div class="scard" style="cursor:pointer" title="Click to filter" onclick="filterByCard('both')"><div class="scard-label">↑ + Rank≥3</div><div class="scard-value" style="color:var(--accent)" id="st-both">—</div><div class="scard-sub">click to filter</div></div>
     <div class="scard" style="cursor:pointer" title="Click to filter" onclick="filterByCard('fire')"><div class="scard-label">Sq. Firing</div><div class="scard-value" style="color:var(--sq-fire)" id="st-fire">—</div><div class="scard-sub">click to filter</div></div>
     <div class="scard" style="cursor:pointer;border-color:var(--accent)" title="Click to filter" onclick="filterByCard('all3')"><div class="scard-label">All 3 Layers</div><div class="scard-value" style="color:#fff;font-size:20px" id="st-all3">—</div><div class="scard-sub">click to filter ★</div></div>
+    <div class="scard" style="cursor:pointer;border-color:var(--green)" title="Fresh RS≥4 cross confirmed by accumulation — best backtested signal" onclick="filterByCard('crossacc')"><div class="scard-label">✚ Cross + Acc</div><div class="scard-value" style="color:var(--green);font-size:20px" id="st-crossacc">—</div><div class="scard-sub">best signal — click ★</div></div>
   </div>
   <div class="sq-legend">
     <span class="sq-leg-title">TTM:</span>
@@ -365,6 +367,7 @@ let allStocks=[], sectorRS={}, spyCloses=null, benchmarkCloses=null, currentFilt
 let benchmarkMode='universe'; // 'universe' | 'spy' | 'qqq'
 let sortBy="rank", sortDir=-1;
 let activeRanks=new Set([3,4,5]), activeSq=new Set();
+let specialFilter=''; // '' | 'crossacc' — set by the Cross+Acc summary card
 let addedTickers=JSON.parse(localStorage.getItem("rsc_watchlist")||"[]");
 let ibdList=JSON.parse(localStorage.getItem("rsc_ibd")||"[]");
 const SECTOR_ETFS = ["XLK","XLF","XLV","XLE","XLI","XLY","XLP","XLU","XLRE","XLB","XLC"];
@@ -390,6 +393,17 @@ function loadLastGoodSnapshot(){
     const parsed=JSON.parse(localStorage.getItem("rsc_lastGood"));
     return(parsed&&Array.isArray(parsed.stocks)&&parsed.stocks.length)?parsed:null;
   }catch(e){ return null; }
+}
+// ANTs-style sustained accumulation (mirrors scripts/backtest.js): over the last W bars,
+// price is up AND up-day volume dominates down-day volume. Best signal in backtest was
+// a fresh RS>=4 cross CONFIRMED by this. Returns {ants:bool, ratio:up/down volume}.
+function calcANTs(closes, volumes, W=15){
+  const n=closes.length;
+  if(!volumes||volumes.length!==n||n<W+1) return {ants:false,ratio:null};
+  let up=0,dn=0;
+  for(let i=n-W;i<n;i++){ if(closes[i]>closes[i-1]) up+=volumes[i]; else dn+=volumes[i]; }
+  const ratio=dn>0?up/dn:null;
+  return {ants: closes[n-1]>closes[n-1-W] && dn>0 && up/dn>=1.25, ratio};
 }
 function calcTTM(closes, highs, lows) {
   const N=20;
@@ -619,10 +633,10 @@ async function fetchStock(t){
     const res=d?.chart?.result?.[0];
     if(!res){ lastFetchErrors.push('empty chart response'); return null; }
     const q=res.indicators?.quote?.[0];
-    const cl=[],hi=[],lo=[];
-    const rc=q?.close||[],rh=q?.high||[],rl=q?.low||[];
-    for(let i=0;i<rc.length;i++){if(rc[i]!=null&&rh[i]!=null&&rl[i]!=null){cl.push(rc[i]);hi.push(rh[i]);lo.push(rl[i]);}}
-    return{closes:cl,highs:hi,lows:lo,name:res.meta?.shortName||t,price:res.meta?.regularMarketPrice||0};
+    const cl=[],hi=[],lo=[],vo=[];
+    const rc=q?.close||[],rh=q?.high||[],rl=q?.low||[],rv=q?.volume||[];
+    for(let i=0;i<rc.length;i++){if(rc[i]!=null&&rh[i]!=null&&rl[i]!=null){cl.push(rc[i]);hi.push(rh[i]);lo.push(rl[i]);vo.push(rv[i]!=null?rv[i]:0);}}
+    return{closes:cl,highs:hi,lows:lo,volumes:vo,name:res.meta?.shortName||t,price:res.meta?.regularMarketPrice||0};
   }catch(e){ lastFetchErrors.push('exception: '+(e&&e.message||'unknown')); return null; }
 }
 const STOCK_CACHE_TTL_MS=15*60*1000; // 15 min — session-only, cleared on page reload
@@ -751,7 +765,7 @@ async function loadAll(){
   const sectorIndices = buildSectorIndices(data);
   const stocks=[];
   for(const[ticker,d]of Object.entries(data)){
-    const{closes,highs,lows,name,price,fetchedAt}=d;
+    const{closes,highs,lows,volumes,name,price,fetchedAt}=d;
     let ratioSeries = closes;
     if(benchmarkCloses && benchmarkCloses.length >= 10){
       const bm = benchmarkCloses;
@@ -763,14 +777,14 @@ async function loadAll(){
         return bVal ? (c/sBase) / (bVal/bBase) : 1;
       });
     }
-    const rs=calcRS(closes),pf=calcPF(ratioSeries),ttm=calcTTM(closes,highs,lows);
+    const rs=calcRS(closes),pf=calcPF(ratioSeries),ttm=calcTTM(closes,highs,lows),antsR=calcANTs(closes,volumes);
     const rrg=calcJdKRRG(closes,spyCloses),rsiS=calcRSIStats(closes),rrgH=calcRRGHistory(closes,spyCloses);
     const sector=getSector(ticker);
     const rsScoreResult=calcRSScore(closes,spyCloses,sectorIndices[sector]);
     const rs4Cross=rsScoreResult.score>=4?rs4CrossBarsAgo(closes,spyCloses,sectorIndices[sector]):null;
     stocks.push({ticker,name,closes,rs,price,pfTrend:pf.trend,pfSignal:pf.signal,
       pfSignalBarsAgo:pf.signalBarsAgo,
-      sqState:ttm.state,sqMomDir:ttm.momDir,sqHistory:ttm.history,
+      sqState:ttm.state,sqMomDir:ttm.momDir,sqHistory:ttm.history,ants:antsR.ants,antsRatio:antsR.ratio,
       rrgRatio:rrg.ratio,rrgMomentum:rrg.momentum,sector,
       isAdded:addedTickers.includes(ticker),isIBD:ibdList.includes(ticker),
       rsi7:rsiS.rsi7,rsi20:rsiS.rsi20,rsi20ma:rsiS.rsi20ma,rsi20prev:rsiS.rsi20prev,
@@ -920,6 +934,7 @@ function applyFilters(){
   if(pfF==='down')data=data.filter(s=>s.pfTrend==='down');
   data=data.filter(s=>activeRanks.has(s.dwaRank));
   if(activeSq.size)data=data.filter(s=>activeSq.has(s.sqState));
+  if(specialFilter==='crossacc')data=data.filter(s=>s.rs4Cross!=null&&s.rs4Cross<=RS4_CROSS_FRESH&&s.ants);
   const sqO={fire:0,on:1,off:2,unknown:3};
   data.sort((a,b)=>{
     if(sortBy==='rank')   return sortDir*(b.dwaRank-a.dwaRank||b.rsPerc-a.rsPerc);
@@ -977,27 +992,27 @@ function csvDownload(name, matrix){
 function exportSignals(){
   const snapTs=(allStocks.find(s=>s.fetchedAt)||{}).fetchedAt;
   const snap=snapTs?new Date(snapTs).toISOString().slice(0,10):new Date().toISOString().slice(0,10);
-  const cols=['Snapshot','Type','Symbol','Name','Signal','Price','RS_Score','PF_Trend','TTM_Mom','Quadrant','Weeks_In_Quad','Ret_Since_Enter_%','RSI7','RSI20','Sector'];
+  const cols=['Snapshot','Type','Symbol','Name','Signal','Price','RS_Score','PF_Trend','TTM_Mom','Quadrant','Weeks_In_Quad','Ret_Since_Enter_%','RSI7','RSI20','Sector','Accum'];
   const sqStocks=allStocks.filter(s=>s.sqState==='fire'||s.sqState==='on')
     .sort((a,b)=>(a.sqState==='fire'?0:1)-(b.sqState==='fire'?0:1)||b.dwaRank-a.dwaRank);
   const stockRows=sqStocks.map(s=>[snap,'STOCK',s.ticker,s.name,
     s.sqState==='fire'?'FIRING':'COILED',s.price.toFixed(2),s.dwaRank,s.pfTrend,s.sqMomDir,
     quad(s.rrgRatio,s.rrgMomentum),'','',
-    s.rsi7!=null?s.rsi7.toFixed(1):'',s.rsi20!=null?s.rsi20.toFixed(1):'',s.sector]);
+    s.rsi7!=null?s.rsi7.toFixed(1):'',s.rsi20!=null?s.rsi20.toFixed(1):'',s.sector,s.ants?'Y':'']);
   // Fresh RS>=4 crosses — the best-backtesting signal (scripts/backtest.js). Signal notes bars since cross.
   const crossStocks=allStocks.filter(s=>s.rs4Cross!=null&&s.rs4Cross<=RS4_CROSS_FRESH)
     .sort((a,b)=>a.rs4Cross-b.rs4Cross||b.dwaRank-a.dwaRank);
   const crossRows=crossStocks.map(s=>[snap,'STOCK',s.ticker,s.name,
-    `RS4_CROSS(${s.rs4Cross===0?'today':s.rs4Cross+'d ago'})`,s.price.toFixed(2),s.dwaRank,s.pfTrend,s.sqMomDir,
+    `RS4_CROSS${s.ants?'+ACC':''}(${s.rs4Cross===0?'today':s.rs4Cross+'d ago'})`,s.price.toFixed(2),s.dwaRank,s.pfTrend,s.sqMomDir,
     quad(s.rrgRatio,s.rrgMomentum),'','',
-    s.rsi7!=null?s.rsi7.toFixed(1):'',s.rsi20!=null?s.rsi20.toFixed(1):'',s.sector]);
+    s.rsi7!=null?s.rsi7.toFixed(1):'',s.rsi20!=null?s.rsi20.toFixed(1):'',s.sector,s.ants?'Y':'']);
   const secOrder={'Leading':0,'Improving':1};
   const sigSectors=Object.entries(sectorRS).filter(([,d])=>d.quad==='Leading'||d.quad==='Improving')
     .sort((a,b)=>secOrder[a[1].quad]-secOrder[b[1].quad]);
   const sectorRows=sigSectors.map(([sec,d])=>[snap,'SECTOR',sec,'',
     d.quad==='Leading'?'LEADING':'IMPROVING','','','','',d.quad,
     d.weeksInQuad!=null?(d.quadCapped?d.weeksInQuad+'+':d.weeksInQuad):'',
-    d.perfSinceQuad!=null?d.perfSinceQuad.toFixed(1):'','','','']);
+    d.perfSinceQuad!=null?d.perfSinceQuad.toFixed(1):'','','','','']);
   if(!stockRows.length&&!crossRows.length&&!sectorRows.length){ alert('No firing/coiled stocks, RS≥4 crosses, or leading/improving sectors right now.'); return; }
   csvDownload(`rs-signals_${snap}.csv`, [cols,...stockRows,...crossRows,...sectorRows]);
 }
@@ -1024,7 +1039,7 @@ function renderTable(data){
       <td class="td-ticker">${s.ticker}${tags}</td>
       <td style="font-family:'Space Mono',monospace;font-size:11px">$${s.price.toFixed(2)}</td>
       <td class="td-name">${s.name}</td>
-      <td><div class="rbadge" style="color:${rc};border:1.5px solid ${rc}">${s.dwaRank}</div>${s.rs4Cross!=null&&s.rs4Cross<=RS4_CROSS_FRESH?`<span class="tag-cross" title="Fresh RS≥4 cross (${s.rs4Cross===0?'today':s.rs4Cross+' bar(s) ago'}) — the signal that backtested best">✚${s.rs4Cross===0?'NEW':s.rs4Cross+'d'}</span>`:''}</td>
+      <td><div class="rbadge" style="color:${rc};border:1.5px solid ${rc}">${s.dwaRank}</div>${s.rs4Cross!=null&&s.rs4Cross<=RS4_CROSS_FRESH?`<span class="tag-cross" title="Fresh RS≥4 cross (${s.rs4Cross===0?'today':s.rs4Cross+' bar(s) ago'}) — best signal when confirmed by accumulation">✚${s.rs4Cross===0?'NEW':s.rs4Cross+'d'}</span>`:''}${s.ants?`<span class="tag-acc" title="ANTs-style accumulation${s.antsRatio?' — up-vol '+s.antsRatio.toFixed(1)+'× down-vol over 15 bars':''}">ACC</span>`:''}</td>
       <td>${s.pfTrend==='up'?'<span class="tup">▲ UP</span>':s.pfTrend==='down'?'<span class="tdn">▼ DN</span>':'<span style="color:var(--muted)">—</span>'}</td>
       <td><span class="pfsig ${s.pfTrend==='up'?'pfbuy':'pfsell'}">${s.pfSignal}</span></td>
       <td><div class="sq-cell"><div class="sq-dot-cell ${sdcls}"></div><span class="sqlbl" style="color:${slcol}">${SL[s.sqState]||'—'}</span></div></td>
@@ -1063,6 +1078,7 @@ function updateStats(){
   document.getElementById('st-both').textContent=u.filter(s=>s.pfTrend==='up'&&s.dwaRank>=3).length;
   document.getElementById('st-fire').textContent=u.filter(s=>s.sqState==='fire').length;
   document.getElementById('st-all3').textContent=u.filter(s=>s.pfTrend==='up'&&s.dwaRank>=3&&s.sqState==='fire').length;
+  document.getElementById('st-crossacc').textContent=u.filter(s=>s.rs4Cross!=null&&s.rs4Cross<=RS4_CROSS_FRESH&&s.ants).length;
 }
 function renderSectorBars(){
   const entries=Object.entries(sectorRS).sort((a,b)=>b[1].rs-a[1].rs);
@@ -1187,6 +1203,8 @@ function filterByCard(type){
   document.querySelectorAll('.rpip').forEach(p=>p.className=`rpip a${p.dataset.r}`);
   document.querySelectorAll('.sqpip').forEach(p=>p.className='sqpip');
   document.getElementById('searchBox').value='';
+  specialFilter='';
+  if(type==='crossacc') specialFilter='crossacc';
   if(type==='up')   document.getElementById('pfFilter').value='up';
   if(type==='r3')   {activeRanks=new Set([3,4,5]);[0,1,2].forEach(r=>document.querySelector(`.rpip[data-r="${r}"]`).className='rpip');}
   if(type==='both') {document.getElementById('pfFilter').value='up';activeRanks=new Set([3,4,5]);[0,1,2].forEach(r=>document.querySelector(`.rpip[data-r="${r}"]`).className='rpip');}
