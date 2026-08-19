@@ -166,7 +166,7 @@ function sectorQuadAt(sector, k) {
   return (sqCache[key] = r ? quad(r.ratio, r.momentum) : null);
 }
 
-const SIGS = ['ALL', 'RS4_CROSS', 'RVOL2X', 'AVWAP_RECLAIM', 'ANTS', 'CROSS&RVOL2X', 'CROSS&AVWAP_RECLAIM', 'CROSS&ANTS'];
+const SIGS = ['ALL', 'RS4_CROSS', 'AVWAP_RECLAIM', 'ANTS', 'MA50W+7.5%', 'CROSS&AVWAP_RECLAIM', 'CROSS&ANTS'];
 const stats = {};
 for (const s of SIGS) { stats[s] = { n: 0 }; for (const h of HORIZONS) stats[s]['h' + h] = { sumRaw: 0, sumExc: 0, win: 0, cnt: 0 }; }
 function record(sig, fwd) {
@@ -177,6 +177,7 @@ function record(sig, fwd) {
 
 const universe = Object.keys(data).filter(t => !NON_STOCKS.has(t));
 const crossFloatEvents = []; // {turn, fwd} for each RS4_CROSS with a known float
+const reclaimFloatEvents = []; // {turn, fwd} for each AVWAP_RECLAIM with a known float
 let evaluated = 0;
 for (const t of universe) {
   const { closes, highs, lows, volumes, float: flt } = data[t];
@@ -232,6 +233,11 @@ for (const t of universe) {
     if (rsi20xma) record('RSI20xMA', fwd);
     if (crossed && rsi7gt50) record('CROSS&RSI7>50', fwd);
     if (crossed && rsi20xma) record('CROSS&RSI20xMA', fwd);
+    // 50-week (250-day) MA: fresh cross to >7.5% above it
+    if (idx >= 250) {
+      const ma = j => { let s = 0; for (let i = j - 249; i <= j; i++) s += closes[i]; return s / 250; };
+      if (closes[idx] > 1.075 * ma(idx) && closes[idx - 1] <= 1.075 * ma(idx - 1)) record('MA50W+7.5%', fwd);
+    }
     // --- Volume signals ---
     if (volumes && volumes.length === L) {
       // Relative volume: today vs 50-day average
@@ -251,7 +257,7 @@ for (const t of universe) {
       let ants = false; const W = 15;
       if (idx >= W) { let up = 0, dn = 0; for (let i = idx - W + 1; i <= idx; i++) (closes[i] > closes[i - 1] ? up += volumes[i] : dn += volumes[i]); ants = closes[idx] > closes[idx - W] && dn > 0 && up / dn >= 1.25; }
       if (rvol2x) record('RVOL2X', fwd);
-      if (reclaim) record('AVWAP_RECLAIM', fwd);
+      if (reclaim) { record('AVWAP_RECLAIM', fwd); if (flt && idx >= 14) { let v = 0; for (let i = idx - 14; i <= idx; i++) v += volumes[i]; reclaimFloatEvents.push({ turn: v / flt, fwd }); } }
       if (ants) record('ANTS', fwd);
       if (crossed && rvol2x) record('CROSS&RVOL2X', fwd);
       if (crossed && reclaim) record('CROSS&AVWAP_RECLAIM', fwd);
@@ -275,21 +281,22 @@ for (const h of HORIZONS) {
   }
   console.log('');
 }
-// --- Does % of float confirm the RS4 cross? Split cross events by recent float turnover. ---
-if (crossFloatEvents.length >= 20) {
-  const sorted = [...crossFloatEvents].sort((a, b) => a.turn - b.turn);
+// --- Does % of float confirm a signal? Median-split its events by recent float turnover. ---
+function floatSplitReport(label, events) {
+  if (events.length < 20) { console.log(`(${label}: only ${events.length} events with float — too few to split)\n`); return; }
+  const sorted = [...events].sort((a, b) => a.turn - b.turn);
   const med = sorted[Math.floor(sorted.length / 2)].turn;
-  const lo = crossFloatEvents.filter(e => e.turn <= med);
-  const hi = crossFloatEvents.filter(e => e.turn > med);
-  console.log(`--- RS4_CROSS split by recent float turnover (15-day volume / float); median = ${(med * 100).toFixed(2)}% of float ---`);
-  console.log(pad('Group', 22) + padL('N', 6) + HORIZONS.map(h => padL('exc+' + h, 9)).join('') + padL('win+40', 9));
-  for (const [name, grp] of [['LOW turnover cross', lo], ['HIGH turnover cross', hi]]) {
+  const lo = events.filter(e => e.turn <= med), hi = events.filter(e => e.turn > med);
+  console.log(`--- ${label} split by float turnover (15d vol / float); median = ${(med * 100).toFixed(2)}% of float ---`);
+  console.log(pad('Group', 20) + padL('N', 6) + HORIZONS.map(h => padL('exc+' + h, 9)).join('') + padL('win+40', 9));
+  for (const [name, grp] of [['LOW turnover', lo], ['HIGH turnover', hi]]) {
     const cells = HORIZONS.map(h => { const es = grp.map(e => e.fwd[h]).filter(Boolean); return padL(es.length ? pct(es.reduce((a, c) => a + c.exc, 0) / es.length) : '-', 9); });
     const e40 = grp.map(e => e.fwd[40]).filter(Boolean);
-    console.log(pad(name, 22) + padL(grp.length, 6) + cells.join('') + padL(e40.length ? (e40.filter(f => f.exc > 0).length / e40.length * 100).toFixed(0) + '%' : '-', 9));
+    console.log(pad(name, 20) + padL(grp.length, 6) + cells.join('') + padL(e40.length ? (e40.filter(f => f.exc > 0).length / e40.length * 100).toFixed(0) + '%' : '-', 9));
   }
-  console.log('If HIGH-turnover crosses beat LOW, % of float adds confirmation. NOTE: R1000 megacaps have huge\nfloats, so turnover is tiny here — this signal is far more meaningful on smaller-float growth names.\n');
-} else {
-  console.log('(Float turnover analysis skipped — no float data in prices.json yet. Regenerate with the updated fetch_prices.py.)\n');
+  console.log('');
 }
+floatSplitReport('RS4_CROSS', crossFloatEvents);
+floatSplitReport('AVWAP_RECLAIM', reclaimFloatEvents);
+console.log('HIGH beating LOW = float turnover confirms that signal (understated on megacap floats).');
 console.log('ExcessVsSPY and Win%vsSPY are the edge over SPY.\n');
