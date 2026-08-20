@@ -283,11 +283,11 @@
     <div style="overflow-x:auto">
       <table>
         <thead><tr>
-          <th>Sector</th>
-          <th>Quadrant Now</th>
-          <th>~1 Month Ago</th>
-          <th>Weeks in Quad</th>
-          <th>Return Since Entering</th>
+          <th title="Sector ETF/basket.">Sector</th>
+          <th title="Current Relative Rotation Graph quadrant: Leading (RS-Ratio>=100 and RS-Momentum>=100), Weakening (RS-Ratio>=100, momentum<100), Improving (RS-Ratio<100, momentum>=100), or Lagging (both <100) - measured vs SPY.">Quadrant Now</th>
+          <th title="The quadrant this sector was in roughly 4 weeks ago, for comparison against Quadrant Now.">~1 Month Ago</th>
+          <th title="Consecutive weeks this sector has stayed in its current quadrant.">Weeks in Quad</th>
+          <th title="Price return since this sector most recently entered its current quadrant.">Return Since Entering</th>
         </tr></thead>
         <tbody id="sectorQuadBody"></tbody>
       </table>
@@ -311,19 +311,19 @@
     <div style="overflow-x:auto">
       <table>
         <thead><tr>
-          <th onclick="setSort('ticker')">Ticker<span class="sa">↕</span></th>
-          <th onclick="setSort('price')">Price<span class="sa">↕</span></th>
-          <th>Name</th>
-          <th onclick="setSort('rank')" class="sorted">RS Score<span class="sa">↕</span></th>
-          <th onclick="setSort('pf')">Rel P&F<span class="sa">↕</span></th>
-          <th>Signal</th>
-          <th onclick="setSort('squeeze')">TTM Squeeze<span class="sa">↕</span></th>
-          <th>Mom</th>
-          <th>RS Bar</th>
-          <th>RRG</th>
-          <th onclick="setSort('rsi7')">RSI 7<span class="sa">↕</span></th>
-          <th onclick="setSort('rsi20')">RSI 20 / MA<span class="sa">↕</span></th>
-          <th>Sector</th>
+          <th onclick="setSort('ticker')" title="Stock ticker symbol.">Ticker<span class="sa">↕</span></th>
+          <th onclick="setSort('price')" title="Last close price.">Price<span class="sa">↕</span></th>
+          <th title="Company name.">Name</th>
+          <th onclick="setSort('rank')" class="sorted" title="5-factor score, 0-5, modeled on Dorsey Wright's methodology (not DWA-sanctioned data): 1pt each for (1) this stock's own P&F trend up, (2) P&F trend of stock-vs-SPY ratio up, (3) P&F buy signal on stock-vs-SPY, (4) P&F trend of stock-vs-sector-peers ratio up, (5) P&F buy signal on stock-vs-sector-peers.&#10;Badges: '+Nd' = fresh RS>=4 cross within N days (best-tested signal in backtest). 'ACC' = ANTs-style accumulation (up-volume >=1.25x down-volume over 15 bars with price up). 'TO x%' = 15-day volume as % of float on a fresh cross (high turnover confirms the cross).">RS Score<span class="sa">↕</span></th>
+          <th onclick="setSort('pf')" title="Point & Figure trend of this stock's own price (3-box reversal method): UP or DOWN.">Rel P&F<span class="sa">↕</span></th>
+          <th title="Current P&F buy/sell signal (e.g. BUY, DBL TOP BUY) from this stock's own P&F chart.">Signal</th>
+          <th onclick="setSort('squeeze')" title="TTM Squeeze state from Bollinger Bands vs Keltner Channels: COILED = bands compressed inside the channel (energy building). FIRING = squeeze just released with rising momentum. OFF = not squeezed / already released.">TTM Squeeze<span class="sa">↕</span></th>
+          <th title="Direction of the TTM Squeeze momentum value versus the prior bar - is the squeeze histogram itself rising, falling, or flat right now (not whether it's positive/negative, just its direction of change).">Mom</th>
+          <th title="Raw relative-strength momentum score: weighted blend of 12-month (40%), 9-month (20%), 6-month (20%), and 3-month (20%) price returns. Green = positive, red = negative; bar width scaled to the largest magnitude in the current table. The small number (Np) is this ticker's percentile rank among all currently-shown stocks.">RS Bar</th>
+          <th title="Relative Rotation Graph quadrant (Leading/Weakening/Lagging/Improving) from JdK RS-Ratio and RS-Momentum vs SPY, plus weeks in the current quadrant and a sparkline of recent quadrant history.">RRG</th>
+          <th onclick="setSort('rsi7')" title="7-period RSI, Wilder smoothing.">RSI 7<span class="sa">↕</span></th>
+          <th onclick="setSort('rsi20')" title="20-period RSI (Wilder smoothing) and its own 20-period moving average.">RSI 20 / MA<span class="sa">↕</span></th>
+          <th title="Sector classification. A warning icon means no peer group is mapped for this sector, so both RS-vs-sector-peers factors in RS Score defaulted to 0.">Sector</th>
         </tr></thead>
         <tbody id="tableBody"></tbody>
       </table>
