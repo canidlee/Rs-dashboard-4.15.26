@@ -29,7 +29,7 @@ R1000 = [
     "CMG","YUM","DRI","ROST","ORLY","AZO","LVS","MGM","HLT","MAR",
     "CAT","DE","HON","UNP","UPS","FDX","RTX","LMT","GE","BA",
     "ETN","EMR","PH","ROK","ITW","MMM","SWK","IR","XYL","CARR",
-    "XOM","CVX","COP","EOG","SLB","MPC","PSX","VLO","OXY","PXD",
+    "XOM","CVX","COP","EOG","SLB","MPC","PSX","VLO","OXY",
     "LIN","APD","ECL","SHW","NEM","FCX","NUE","CF","MOS","ALB",
     "PG","KO","PEP","WMT","COST","TGT","PM","MO","CL","KMB",
     "NEE","DUK","SO","D","AEP","AMT","PLD","SPG","O","WELL",
