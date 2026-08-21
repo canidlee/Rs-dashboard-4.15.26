@@ -181,11 +181,12 @@
     </div>
   </div>
   <div>
-    <div class="sb-title">➕ Add Tickers</div>
+    <div class="sb-title">➕ Add / Look Up Tickers <span style="font-size:9px;color:var(--muted)">(type one to analyze it)</span></div>
     <div class="input-zone">
-      <textarea id="addBox" placeholder="AAPL, TSLA, NVDA&#10;Any ticker — type or paste"></textarea>
+      <textarea id="addBox" placeholder="Type ONE symbol to analyze it — e.g. NVDA&#10;or paste many: AAPL, TSLA, NVDA"></textarea>
+      <input id="floatBox" type="number" step="0.1" min="0" placeholder="Float in millions (optional → adds TO%)" style="background:transparent;border:none;border-top:1px solid var(--border);color:var(--text);font-family:'Space Mono',monospace;font-size:10px;outline:none;width:100%;padding:6px 0 3px">
       <div class="btn-row">
-        <div class="sb-btn" onclick="addTickers()">+ ADD</div>
+        <div class="sb-btn" onclick="addTickers()">+ ADD / ANALYZE</div>
         <div class="sb-btn danger" onclick="clearAdded()">CLEAR</div>
       </div>
       <div class="sb-note" id="addedNote">0 custom tickers added</div>
@@ -373,6 +374,9 @@ let activeRanks=new Set([3,4,5]), activeSq=new Set();
 let specialFilter=''; // '' | 'crossacc' — set by the Cross+Acc summary card
 let addedTickers=JSON.parse(localStorage.getItem("rsc_watchlist")||"[]");
 let ibdList=JSON.parse(localStorage.getItem("rsc_ibd")||"[]");
+// User-supplied share float (in raw shares) per ticker, for TO% on looked-up tickers that
+// the server-side pipeline can't fetch float for. Keyed by ticker.
+let floatOverrides=JSON.parse(localStorage.getItem("rsc_floatOverrides")||"{}");
 const SECTOR_ETFS = ["XLK","XLF","XLV","XLE","XLI","XLY","XLP","XLU","XLRE","XLB","XLC"];
 // Maps each dashboard sector to its real SPDR sector ETF for the RRG (StockCharts methodology).
 const SECTOR_ETF_MAP = {"Tech":"XLK","Financials":"XLF","Healthcare":"XLV","Cons.Disc":"XLY","Industrials":"XLI","Energy":"XLE","Materials":"XLB","Staples":"XLP","Utilities":"XLU","Real Estate":"XLRE"};
@@ -381,6 +385,7 @@ function saveState(){
   localStorage.setItem("rsc_watchlist",JSON.stringify(addedTickers));
   localStorage.setItem("rsc_ibd",JSON.stringify(ibdList));
   localStorage.setItem("rsc_universes",JSON.stringify([...activeUniverses]));
+  localStorage.setItem("rsc_floatOverrides",JSON.stringify(floatOverrides));
 }
 // Persists a slimmed copy (no raw price history — that's the bulk of the size)
 // of the last successful load, so a totally-failed fetch on a fresh page load
@@ -776,7 +781,8 @@ async function loadAll(){
   const sectorIndices = buildSectorIndices(data);
   const stocks=[];
   for(const[ticker,d]of Object.entries(data)){
-    const{closes,highs,lows,volumes,float:floatShares,name,price,fetchedAt}=d;
+    const{closes,highs,lows,volumes,name,price,fetchedAt}=d;
+    const floatShares=d.float??floatOverrides[ticker]; // pipeline float, else user-supplied (looked-up tickers)
     let ratioSeries = closes;
     if(benchmarkCloses && benchmarkCloses.length >= 10){
       const bm = benchmarkCloses;
@@ -1259,6 +1265,9 @@ async function addTickers(){
   const raw=document.getElementById('addBox').value;
   const ts=raw.toUpperCase().split(/[\s,\n;]+/).filter(t=>/^[A-Z]{1,5}(-[A-Z])?$/.test(t));
   if(!ts.length){alert('No valid tickers found.');return;}
+  const floatM=parseFloat(document.getElementById('floatBox').value);
+  if(!isNaN(floatM)&&floatM>0){ floatOverrides[ts[0]]=floatM*1e6; } // float (M) applies to the first symbol
+  document.getElementById('floatBox').value='';
   addedTickers=[...new Set([...addedTickers,...ts])];
   activeUniverses.add('watch');
   saveState();
