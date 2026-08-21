@@ -421,6 +421,39 @@ function calcFloatTurnover(volumes, floatShares, W=15){
   return v/floatShares;
 }
 const FLOAT_TO_HIGH=0.15; // ≥15% of float in 15 bars = "high turnover" (green); tune per universe
+// Ported from stock_evaluator_v2.html detectAnchors(): significant high = peak (last 252 bars)
+// that was followed by a >=15% drawdown; significant low = trough followed by a >=12% recovery.
+// Falls back to plain 52-week high/low if no qualifying swing is found.
+function detectAnchors(closes, ddThresh=0.15, recThresh=0.12){
+  const n=closes.length, scanStart=Math.max(0,n-252);
+  let sigHighIdx=null, sigHighVal=-Infinity;
+  for(let i=scanStart;i<n-10;i++){
+    const peak=closes[i], minAfter=Math.min(...closes.slice(i,Math.min(i+120,n)));
+    if((peak-minAfter)/peak>=ddThresh && peak>sigHighVal){ sigHighVal=peak; sigHighIdx=i; }
+  }
+  let sigLowIdx=null, sigLowVal=Infinity;
+  for(let i=scanStart;i<n-5;i++){
+    const trough=closes[i], maxAfter=Math.max(...closes.slice(i,Math.min(i+120,n)));
+    if((maxAfter-trough)/trough>=recThresh && trough<sigLowVal){ sigLowVal=trough; sigLowIdx=i; }
+  }
+  if(sigHighIdx===null){ let m=-Infinity; for(let i=scanStart;i<n;i++) if(closes[i]>m){m=closes[i];sigHighIdx=i;} }
+  if(sigLowIdx===null){ let m=Infinity; for(let i=scanStart;i<n;i++) if(closes[i]<m){m=closes[i];sigLowIdx=i;} }
+  return {sigHighIdx, sigHighPrice:closes[sigHighIdx], sigLowIdx, sigLowPrice:closes[sigLowIdx]};
+}
+// Anchored VWAP from anchorIdx to the latest bar (typical price × volume, cumulative).
+function anchoredVWAP(highs, lows, closes, volumes, anchorIdx){
+  if(anchorIdx==null||!volumes||!volumes.length) return null;
+  let tpv=0, vol=0;
+  for(let i=anchorIdx;i<closes.length;i++){ tpv+=((highs[i]+lows[i]+closes[i])/3)*volumes[i]; vol+=volumes[i]; }
+  return vol>0?tpv/vol:null;
+}
+// Float turnover measured since an anchor bar (your evaluator's calcFloatTurnover): how much of
+// the float has traded since the significant high — a churn/accumulation read off that pivot.
+function turnoverSince(volumes, anchorIdx, floatShares){
+  if(anchorIdx==null||!floatShares||floatShares<=0||!volumes) return null;
+  let v=0; for(let i=anchorIdx;i<volumes.length;i++) v+=volumes[i];
+  return v/floatShares;
+}
 function calcTTM(closes, highs, lows) {
   const N=20;
   if(!closes||closes.length<N+5) return {state:'unknown',momDir:'flat',history:[]};
@@ -795,6 +828,11 @@ async function loadAll(){
       });
     }
     const rs=calcRS(closes),pf=calcPF(ratioSeries),ttm=calcTTM(closes,highs,lows),antsR=calcANTs(closes,volumes),floatTurn=calcFloatTurnover(volumes,floatShares);
+    const anc=detectAnchors(closes);
+    const avwapHigh=anchoredVWAP(highs,lows,closes,volumes,anc.sigHighIdx);
+    const avwapLow=anchoredVWAP(highs,lows,closes,volumes,anc.sigLowIdx);
+    const toSinceHigh=turnoverSince(volumes,anc.sigHighIdx,floatShares);
+    const highAnchorBarsAgo=anc.sigHighIdx!=null?closes.length-1-anc.sigHighIdx:null;
     const rrg=calcJdKRRG(closes,spyCloses),rsiS=calcRSIStats(closes),rrgH=calcRRGHistory(closes,spyCloses);
     const sector=getSector(ticker);
     const rsScoreResult=calcRSScore(closes,spyCloses,sectorIndices[sector]);
@@ -802,6 +840,7 @@ async function loadAll(){
     stocks.push({ticker,name,closes,rs,price,pfTrend:pf.trend,pfSignal:pf.signal,
       pfSignalBarsAgo:pf.signalBarsAgo,
       sqState:ttm.state,sqMomDir:ttm.momDir,sqHistory:ttm.history,ants:antsR.ants,antsRatio:antsR.ratio,floatTurn,floatShares,
+      avwapHigh,avwapLow,toSinceHigh,highAnchorBarsAgo,sigHighPrice:anc.sigHighPrice,sigLowPrice:anc.sigLowPrice,
       rrgRatio:rrg.ratio,rrgMomentum:rrg.momentum,sector,
       isAdded:addedTickers.includes(ticker),isIBD:ibdList.includes(ticker),
       rsi7:rsiS.rsi7,rsi20:rsiS.rsi20,rsi20ma:rsiS.rsi20ma,rsi20prev:rsiS.rsi20prev,
@@ -1164,6 +1203,9 @@ function showDetail(ticker){
       <div class="det-item"><div class="det-lbl">Float Turnover (15d ÷ float)</div><div class="det-val" style="color:${s.floatTurn!=null?(s.floatTurn>=FLOAT_TO_HIGH?'var(--green)':'var(--muted)'):'var(--muted)'};font-size:13px">${s.floatTurn!=null?(s.floatTurn*100).toFixed(1)+'%':'—'}${s.floatTurn!=null&&s.floatTurn>=FLOAT_TO_HIGH?' <span style="font-size:9px;color:var(--muted)">high</span>':''}</div></div>
       <div class="det-item"><div class="det-lbl">Accumulation (ANTs)</div><div class="det-val" style="color:${s.ants?'var(--accent2)':'var(--muted)'};font-size:13px">${s.ants?'▲ Yes':'—'}${s.antsRatio?` <span style="font-size:10px;color:var(--muted)">${s.antsRatio.toFixed(1)}× up/dn vol</span>`:''}</div></div>
       <div class="det-item"><div class="det-lbl">Share Float</div><div class="det-val" style="font-size:13px">${s.floatShares?(s.floatShares/1e6>=1000?(s.floatShares/1e9).toFixed(2)+'B':(s.floatShares/1e6).toFixed(0)+'M'):'—'}</div></div>
+      <div class="det-item"><div class="det-lbl">AVWAP from Sig High</div><div class="det-val" style="font-size:13px;color:${s.avwapHigh!=null?(s.price>=s.avwapHigh?'var(--green)':'var(--red)'):'var(--muted)'}">${s.avwapHigh!=null?'$'+s.avwapHigh.toFixed(2):'—'}${s.avwapHigh!=null?` <span style="font-size:9px">${s.price>=s.avwapHigh?'▲ reclaimed':'▼ below'}</span>`:''}</div></div>
+      <div class="det-item"><div class="det-lbl">Turnover Since High</div><div class="det-val" style="font-size:13px;color:${s.toSinceHigh!=null?(s.toSinceHigh>=1?'var(--green)':'var(--muted)'):'var(--muted)'}">${s.toSinceHigh!=null?(s.toSinceHigh*100).toFixed(0)+'%':'—'}${s.highAnchorBarsAgo!=null?` <span style="font-size:9px;color:var(--muted)">~${Math.round(s.highAnchorBarsAgo/5)}w ago</span>`:''}</div></div>
+      <div class="det-item"><div class="det-lbl">AVWAP from Sig Low</div><div class="det-val" style="font-size:13px;color:${s.avwapLow!=null?(s.price>=s.avwapLow?'var(--green)':'var(--red)'):'var(--muted)'}">${s.avwapLow!=null?'$'+s.avwapLow.toFixed(2):'—'}${s.avwapLow!=null?` <span style="font-size:9px">${s.price>=s.avwapLow?'▲ above':'▼ below'}</span>`:''}</div></div>
       <div class="det-item"><div class="det-lbl">Rel P&F Trend (vs bmk)</div><div class="det-val" style="color:${s.pfTrend==='up'?'var(--green)':'var(--red)'}">${s.pfTrend==='up'?'▲ UP':'▼ DOWN'}</div></div>
       <div class="det-item"><div class="det-lbl">TTM Squeeze (vol)</div><div class="det-val" style="color:${sqCol};font-size:12px">${sqLbl}</div></div>
       <div class="det-item"><div class="det-lbl">TTM Mom (vol)</div><div class="det-val" style="color:${s.sqMomDir==='up'?'var(--green)':'var(--red)'};font-size:12px">${s.sqMomDir==='up'?'▲ Rising':s.sqMomDir==='down'?'▼ Falling':'Flat'}</div></div>
