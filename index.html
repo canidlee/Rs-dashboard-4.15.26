@@ -933,19 +933,25 @@ function applyFilters(){
   const pfF=document.getElementById('pfFilter').value;
   const q=document.getElementById('searchBox').value.toLowerCase();
   let data=[...allStocks];
-  data=data.filter(s=>{
-    if(activeUniverses.has('r1000')&&R1000.includes(s.ticker))return true;
-    if(activeUniverses.has('ibd')&&ibdList.includes(s.ticker))return true;
-    if(activeUniverses.has('watch')&&addedTickers.includes(s.ticker))return true;
-    if(activeUniverses.has('etf')&&SECTOR_ETFS.includes(s.ticker))return true;
-    return false;
-  });
-  if(q)data=data.filter(s=>s.ticker.toLowerCase().includes(q)||s.name.toLowerCase().includes(q));
-  if(pfF==='up')data=data.filter(s=>s.pfTrend==='up');
-  if(pfF==='down')data=data.filter(s=>s.pfTrend==='down');
-  data=data.filter(s=>activeRanks.has(s.dwaRank));
-  if(activeSq.size)data=data.filter(s=>activeSq.has(s.sqState));
-  if(specialFilter==='crossacc')data=data.filter(s=>s.rs4Cross!=null&&s.rs4Cross<=RS4_CROSS_FRESH&&s.ants);
+  if(q){
+    // A search OVERRIDES every filter: if a symbol is loaded, searching it always surfaces it,
+    // regardless of universe, RS-score, P&F, squeeze or cross+acc filters. (Fixes "I added a
+    // ticker but searching doesn't find it" — its RS score was outside the 3-5 default filter.)
+    data=data.filter(s=>s.ticker.toLowerCase().includes(q)||s.name.toLowerCase().includes(q));
+  }else{
+    data=data.filter(s=>{
+      if(activeUniverses.has('r1000')&&R1000.includes(s.ticker))return true;
+      if(activeUniverses.has('ibd')&&ibdList.includes(s.ticker))return true;
+      if(activeUniverses.has('watch')&&addedTickers.includes(s.ticker))return true;
+      if(activeUniverses.has('etf')&&SECTOR_ETFS.includes(s.ticker))return true;
+      return false;
+    });
+    if(pfF==='up')data=data.filter(s=>s.pfTrend==='up');
+    if(pfF==='down')data=data.filter(s=>s.pfTrend==='down');
+    data=data.filter(s=>activeRanks.has(s.dwaRank));
+    if(activeSq.size)data=data.filter(s=>activeSq.has(s.sqState));
+    if(specialFilter==='crossacc')data=data.filter(s=>s.rs4Cross!=null&&s.rs4Cross<=RS4_CROSS_FRESH&&s.ants);
+  }
   const sqO={fire:0,on:1,off:2,unknown:3};
   data.sort((a,b)=>{
     if(sortBy==='rank')   return sortDir*(b.dwaRank-a.dwaRank||b.rsPerc-a.rsPerc);
@@ -1249,7 +1255,7 @@ function toggleSq(sq){
   else{activeSq.add(sq);p.className=`sqpip a${sq}`;}
   applyFilters();
 }
-function addTickers(){
+async function addTickers(){
   const raw=document.getElementById('addBox').value;
   const ts=raw.toUpperCase().split(/[\s,\n;]+/).filter(t=>/^[A-Z]{1,5}(-[A-Z])?$/.test(t));
   if(!ts.length){alert('No valid tickers found.');return;}
@@ -1260,7 +1266,17 @@ function addTickers(){
   document.getElementById('cnt-watch').textContent=addedTickers.length;
   document.getElementById('addBox').value='';
   syncUniverseTabs();
-  loadAll();
+  await loadAll();
+  // Surface what you just added: report any that failed to load, then jump straight to the analysis.
+  const loaded=ts.filter(t=>allStocks.some(s=>s.ticker===t));
+  const failed=ts.filter(t=>!loaded.includes(t));
+  if(failed.length) showErr(`Couldn't load ${failed.join(', ')} — symbol may be invalid, or the live feed (corsproxy) failed. Hit ↻ REFRESH to retry.`);
+  if(loaded.length){
+    const focus=loaded[loaded.length-1];
+    document.getElementById('searchBox').value=focus; // search overrides filters, so it always shows
+    applyFilters();
+    if(loaded.length===1) showDetail(focus); // one ticker -> open its analysis panel immediately
+  }
 }
 function clearAdded(){
   if(!addedTickers.length)return;
